@@ -122,10 +122,6 @@ function interceptQuery(data: Uint8Array): Uint8Array {
     const len = view.getInt32(1)
     let query = new TextDecoder().decode(data.subarray(5, 1 + len - 1)).replace(/\0$/, '')
 
-    if (query.toUpperCase().includes('SET TRANSACTION')) {
-      log.debug.proxy(`[INTERCEPT] simple query SET TRANSACTION: ${query.slice(0, 100)}`)
-    }
-
     let modified = false
     for (const rw of QUERY_REWRITES) {
       if (rw.match.test(query)) {
@@ -142,9 +138,6 @@ function interceptQuery(data: Uint8Array): Uint8Array {
   } else if (msgType === 0x50) {
     const query = extractParseQuery(data)
     if (query) {
-      if (query.toUpperCase().includes('SET TRANSACTION')) {
-        log.debug.proxy(`[INTERCEPT] parse query SET TRANSACTION: ${query.slice(0, 100)}`)
-      }
       let newQuery = query
       let modified = false
       for (const rw of QUERY_REWRITES) {
@@ -285,6 +278,18 @@ export async function startPgProxy(db: PGlite, config: ZeroLiteConfig): Promise<
     let dbName = 'postgres'
     let isReplicationConnection = false
 
+    // clean up pglite transaction state when a client disconnects
+    socket.on('close', async () => {
+      await mutex.acquire()
+      try {
+        await db.exec('ROLLBACK')
+      } catch {
+        // no transaction to rollback, that's fine
+      } finally {
+        mutex.release()
+      }
+    })
+
     try {
       const connection = await fromNodeSocket(socket, {
         auth: {
@@ -349,7 +354,13 @@ export async function startPgProxy(db: PGlite, config: ZeroLiteConfig): Promise<
           try {
             const searchPath = DB_SCHEMA_MAP[dbName] || 'public'
             if (currentSearchPath !== searchPath) {
-              await db.exec(`SET search_path TO ${searchPath}`)
+              try {
+                await db.exec(`SET search_path TO ${searchPath}`)
+              } catch {
+                // pglite may be in aborted transaction state — reset it
+                await db.exec('ROLLBACK')
+                await db.exec(`SET search_path TO ${searchPath}`)
+              }
               currentSearchPath = searchPath
             }
             let result = await db.execProtocolRaw(data, {
