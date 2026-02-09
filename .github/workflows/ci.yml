@@ -20,6 +20,9 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      - name: build
+        run: bun run build
+
       - name: lint
         run: bun run lint
 
