@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 
 import { PGlite } from '@electric-sql/pglite'
 import { vector } from '@electric-sql/pglite/vector'
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm'
 
 import { log } from './log.js'
 
@@ -18,7 +19,7 @@ export async function createPGliteInstance(config: ZeroLiteConfig): Promise<PGli
     dataDir: dataPath,
     debug: config.logLevel === 'debug' ? 1 : 0,
     ...userOpts,
-    extensions: userOpts.extensions || { vector },
+    extensions: userOpts.extensions || { vector, pg_trgm },
   })
 
   await db.waitReady
