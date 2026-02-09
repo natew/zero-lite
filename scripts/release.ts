@@ -13,6 +13,7 @@ const dryRun = args.includes('--dry-run')
 const patch = args.includes('--patch')
 const minor = args.includes('--minor')
 const major = args.includes('--major')
+const skipTest = args.includes('--skip-test')
 
 if (!patch && !minor && !major) {
   console.info('usage: bun scripts/release.ts --patch|--minor|--major [--dry-run]')
@@ -67,11 +68,12 @@ if (hasSqliteWasm) {
 console.info('\nchecking orez...')
 run('bun run lint')
 run('bun run check')
-run('bun run test')
-
-if (hasSqliteWasm) {
-  console.info('\nchecking bedrock-sqlite...')
-  run('bunx vitest run', { cwd: sqliteWasmDir })
+if (!skipTest) {
+  run('bun run test')
+  if (hasSqliteWasm) {
+    console.info('\nchecking bedrock-sqlite...')
+    run('bunx vitest run', { cwd: sqliteWasmDir })
+  }
 }
 
 // build orez

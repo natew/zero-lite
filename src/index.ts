@@ -134,7 +134,7 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
     log.orez('stopped')
   }
 
-  return { config, stop }
+  return { config, stop, db, pgPort: config.pgPort, zeroPort: config.zeroPort }
 }
 
 // use .env.development.local so it overrides .env.development in vite's load order:
@@ -350,7 +350,16 @@ async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
   try {
     zeroEntry = import.meta.resolve('@rocicorp/zero').replace('file://', '')
   } catch {
-    // package not resolvable
+    // package not resolvable via import.meta.resolve (e.g. in vitest)
+  }
+  if (!zeroEntry) {
+    try {
+      const { createRequire } = await import('node:module')
+      const require = createRequire(import.meta.url)
+      zeroEntry = require.resolve('@rocicorp/zero')
+    } catch {
+      // still not resolvable
+    }
   }
 
   if (!zeroEntry) {

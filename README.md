@@ -149,11 +149,11 @@ The pgoutput encoder produces spec-compliant binary messages: Begin, Relation, I
 
 ## Tests
 
-119 tests — 82 orez tests across 6 test files covering the full stack from binary encoding to TCP-level integration, plus 37 bedrock-sqlite tests covering the WASM SQLite engine:
+141 tests — 104 orez tests across 7 test files covering the full stack from binary encoding to TCP-level integration, plus 37 bedrock-sqlite tests covering the WASM SQLite engine:
 
 ```
-bun test                                    # orez tests
-cd sqlite-wasm && bunx vitest run            # bedrock-sqlite tests
+bun run test                                # orez tests
+cd sqlite-wasm && bunx vitest run           # bedrock-sqlite tests
 ```
 
 The orez test suite includes a zero-cache compatibility layer that decodes pgoutput messages into the same typed format that zero-cache's PgoutputParser produces, validating end-to-end compatibility.

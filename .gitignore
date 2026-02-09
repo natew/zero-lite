@@ -6,3 +6,5 @@ dist
 .env
 .env.local
 .DS_Store
+.orez-integration*
+.env.*.local
