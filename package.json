@@ -1,0 +1,55 @@
+{
+  "name": "zerolite",
+  "version": "0.0.1",
+  "description": "PGlite-powered zero-sync development backend. No Docker required.",
+  "type": "module",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "oxlint --import-plugin",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "check": "tsc --noEmit",
+    "check:all": "bun run lint && bun run format:check && bun run check && bun run test",
+    "release": "bun scripts/release.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.2.17",
+    "pg-gateway": "^0.3.0-beta.4"
+  },
+  "devDependencies": {
+    "oxlint": "latest",
+    "oxfmt": "latest",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "@types/node": "^22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/natew/zero-lite"
+  },
+  "keywords": [
+    "zero",
+    "pglite",
+    "postgres",
+    "replication",
+    "sync",
+    "zero-cache",
+    "development"
+  ]
+}

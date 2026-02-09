@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="48" y1="20" x2="80" y2="108" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <!-- zero: stylized 0 ring -->
+  <ellipse cx="64" cy="64" rx="38" ry="42" stroke="url(#bolt)" stroke-width="5" fill="none" opacity="0.25"/>
+  <!-- lite: lightning bolt through the zero -->
+  <path d="M72 22L50 68h18L56 106l30-52H68L72 22z" fill="url(#bolt)"/>
+</svg>

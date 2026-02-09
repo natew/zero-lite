@@ -1,0 +1,7 @@
+node_modules
+dist
+.zero-lite
+*.tgz
+.env
+.env.local
+.DS_Store
