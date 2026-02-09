@@ -122,6 +122,10 @@ function interceptQuery(data: Uint8Array): Uint8Array {
     const len = view.getInt32(1)
     let query = new TextDecoder().decode(data.subarray(5, 1 + len - 1)).replace(/\0$/, '')
 
+    if (query.toUpperCase().includes('SET TRANSACTION')) {
+      log.debug.proxy(`[INTERCEPT] simple query SET TRANSACTION: ${query.slice(0, 100)}`)
+    }
+
     let modified = false
     for (const rw of QUERY_REWRITES) {
       if (rw.match.test(query)) {
@@ -138,6 +142,9 @@ function interceptQuery(data: Uint8Array): Uint8Array {
   } else if (msgType === 0x50) {
     const query = extractParseQuery(data)
     if (query) {
+      if (query.toUpperCase().includes('SET TRANSACTION')) {
+        log.debug.proxy(`[INTERCEPT] parse query SET TRANSACTION: ${query.slice(0, 100)}`)
+      }
       let newQuery = query
       let modified = false
       for (const rw of QUERY_REWRITES) {
