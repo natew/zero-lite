@@ -175,19 +175,22 @@ async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
   const cvrUrl = getConnectionString(config, 'zero_cvr')
   const cdbUrl = getConnectionString(config, 'zero_cdb')
 
-  const env: Record<string, string> = {
-    ...(process.env as Record<string, string>),
+  // defaults that can be overridden by user env
+  const defaults: Record<string, string> = {
     NODE_ENV: 'development',
+    ZERO_LOG_LEVEL: 'info',
+    ZERO_NUM_SYNC_WORKERS: '1',
+  }
+
+  const env: Record<string, string> = {
+    ...defaults,
+    ...(process.env as Record<string, string>),
+    // these must be set by orez
     ZERO_UPSTREAM_DB: upstreamUrl,
     ZERO_CVR_DB: cvrUrl,
     ZERO_CHANGE_DB: cdbUrl,
     ZERO_REPLICA_FILE: resolve(config.dataDir, 'zero-replica.db'),
     ZERO_PORT: String(config.zeroPort),
-    ZERO_MUTATE_URL: `http://localhost:${config.webPort}/api/zero/push`,
-    ZERO_QUERY_URL: `http://localhost:${config.webPort}/api/zero/pull`,
-    ZERO_LOG_LEVEL: 'info',
-    ZERO_NUM_SYNC_WORKERS: '1',
-    DO_NOT_TRACK: '1',
   }
 
   const child = spawn(zeroCacheBin, [], {

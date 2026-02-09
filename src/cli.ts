@@ -2,6 +2,7 @@
 import { defineCommand, runMain } from 'citty'
 
 import { startZeroLite } from './index.js'
+import { log } from './log.js'
 import { startS3Local } from './s3-local.js'
 
 const s3Command = defineCommand({
@@ -54,11 +55,6 @@ const main = defineCommand({
       description: 'zero-cache port',
       default: '5849',
     },
-    'web-port': {
-      type: 'string',
-      description: 'web server port (for zero-cache mutate/query urls)',
-      default: '8081',
-    },
     'data-dir': {
       type: 'string',
       description: 'data directory',
@@ -97,7 +93,6 @@ const main = defineCommand({
     const { config, stop } = await startZeroLite({
       pgPort: Number(args['pg-port']),
       zeroPort: Number(args['zero-port']),
-      webPort: Number(args['web-port']),
       dataDir: args['data-dir'],
       migrationsDir: args.migrations,
       seedFile: args.seed,
@@ -106,12 +101,12 @@ const main = defineCommand({
       skipZeroCache: args['skip-zero-cache'],
     })
 
-    console.info(`[orez] ready`)
-    console.info(
-      `[orez]   pg: postgresql://${config.pgUser}:${config.pgPassword}@127.0.0.1:${config.pgPort}/postgres`
+    log.orez('ready')
+    log.orez(
+      `pg: postgresql://${config.pgUser}:${config.pgPassword}@127.0.0.1:${config.pgPort}/postgres`
     )
     if (!config.skipZeroCache) {
-      console.info(`[orez]   zero-cache: http://localhost:${config.zeroPort}`)
+      log.zero(`http://localhost:${config.zeroPort}`)
     }
 
     process.on('SIGINT', async () => {

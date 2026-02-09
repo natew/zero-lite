@@ -6,7 +6,6 @@ const lite = await startZeroLite({
   dataDir: join(import.meta.dir, '../.zero-lite'),
   pgPort: 6435,
   zeroPort: 4849,
-  webPort: 3456,
   migrationsDir: join(import.meta.dir, 'database/migrations'),
   seedFile: '',
   skipZeroCache: true,

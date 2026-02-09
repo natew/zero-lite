@@ -19,18 +19,38 @@ The proxy also handles multi-database routing. zero-cache expects three separate
 ## Install
 
 ```
-npm install orez
+npm install orez @rocicorp/zero
 ```
 
-or with bun:
+`@rocicorp/zero` is a peer dependency that provides the zero-cache binary. You can skip it if you only need PGlite + the proxy (`--skip-zero-cache`).
+
+## CLI
 
 ```
-bun add orez
+npx orez
 ```
 
-You also need `@rocicorp/zero` installed in your project for the zero-cache binary.
+Starts PGlite, the TCP proxy, and zero-cache. Ports auto-increment if already in use.
 
-## Usage
+```
+--pg-port          postgresql proxy port (default: 6434)
+--zero-port        zero-cache port (default: 5849)
+--data-dir         data directory (default: .zero-lite)
+--migrations       migrations directory (default: src/database/migrations)
+--seed             seed file path
+--pg-user          postgresql user (default: user)
+--pg-password      postgresql password (default: password)
+--skip-zero-cache  run pglite + proxy only, skip zero-cache
+```
+
+S3 subcommand:
+
+```
+npx orez s3
+npx orez s3 --port 9200 --data-dir .orez
+```
+
+## Programmatic
 
 ```typescript
 import { startZeroLite } from 'orez'
@@ -49,37 +69,51 @@ const { config, stop } = await startZeroLite({
 await stop()
 ```
 
-All options are optional and have sensible defaults. See `src/config.ts` for the full list.
+All options are optional with sensible defaults. Ports auto-find if in use.
 
-## CLI
+## Vite plugin
 
-Run directly with npx/bunx:
+```typescript
+import orez from 'orez/vite'
 
-```
-npx orez
-```
-
-This starts PGlite, the TCP proxy, and zero-cache. Install `@rocicorp/zero` alongside orez to get the zero-cache binary (it's an optional peer dep, only needed if you're running zero-cache).
-
-Options:
-
-```
---pg-port        postgresql proxy port (default: 6434)
---zero-port      zero-cache port (default: 5849)
---web-port       web server port for zero-cache mutate/query urls (default: 8081)
---data-dir       data directory (default: .zero-lite)
---migrations     migrations directory (default: src/database/migrations)
---seed           seed file path
---pg-user        postgresql user (default: user)
---pg-password    postgresql password (default: password)
---skip-zero-cache  run pglite + proxy only, skip zero-cache
+export default {
+  plugins: [
+    orez({
+      pgPort: 6434,
+      zeroPort: 5849,
+      migrationsDir: 'src/database/migrations',
+    }),
+  ],
+}
 ```
 
-S3 subcommand for a local S3-compatible server:
+Starts orez when vite dev server starts, stops on close.
 
-```
-npx orez s3
-npx orez s3 --port 9200 --data-dir .orez
+## Environment variables
+
+Your entire environment is forwarded to the zero-cache child process. This means any `ZERO_*` env vars you set are passed through automatically.
+
+orez provides sensible defaults for a few variables:
+
+| Variable | Default | Overridable |
+|----------|---------|-------------|
+| `NODE_ENV` | `development` | yes |
+| `ZERO_LOG_LEVEL` | `info` | yes |
+| `ZERO_NUM_SYNC_WORKERS` | `1` | yes |
+| `ZERO_UPSTREAM_DB` | *(managed by orez)* | no |
+| `ZERO_CVR_DB` | *(managed by orez)* | no |
+| `ZERO_CHANGE_DB` | *(managed by orez)* | no |
+| `ZERO_REPLICA_FILE` | *(managed by orez)* | no |
+| `ZERO_PORT` | *(managed by orez)* | no |
+
+The layering is: orez defaults → your env → orez-managed connection vars. So setting `ZERO_LOG_LEVEL=debug` in your shell overrides the default, but you can't override the database connection strings (orez needs to point zero-cache at its own proxy).
+
+Common vars you might want to set:
+
+```bash
+ZERO_MUTATE_URL=http://localhost:3000/api/zero/push
+ZERO_QUERY_URL=http://localhost:3000/api/zero/pull
+ZERO_LOG_LEVEL=debug
 ```
 
 ## What gets faked
@@ -99,7 +133,7 @@ The pgoutput encoder produces spec-compliant binary messages: Begin, Relation, I
 
 ## Tests
 
-80 unit tests across 5 test files covering the full stack from binary encoding to TCP-level integration:
+82 tests across 6 test files covering the full stack from binary encoding to TCP-level integration:
 
 ```
 bun test
@@ -121,17 +155,21 @@ This is a development tool. It is not suitable for production use.
 ```
 src/
   index.ts              main entry, orchestrates startup
+  cli.ts                cli with citty
   config.ts             configuration with defaults
+  log.ts                colored log prefixes
+  port.ts               auto port finding
   pg-proxy.ts           tcp proxy with query rewriting
   pglite-manager.ts     pglite instance and migration runner
   s3-local.ts           standalone local s3 server (orez/s3)
+  vite-plugin.ts        vite dev server plugin (orez/vite)
   replication/
     handler.ts          replication protocol state machine
     pgoutput-encoder.ts binary pgoutput message encoder
     change-tracker.ts   trigger installation and change reader
 ```
 
-## Extra
+## Extra: orez/s3
 
 The other annoying dep we found ourselves needing often was s3, so we're exporting `orez/s3`. Its likewise a tiny, dev-only helper for avoiding heavy docker deps like minio.
 
