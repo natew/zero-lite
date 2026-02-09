@@ -25,23 +25,24 @@ bunx orez
 ```
 
 ```
---pg-port          postgresql proxy port (default: 6434)
---zero-port        zero-cache port (default: 5849)
---data-dir         data directory (default: .orez)
---migrations       migrations directory (skipped if not set)
---seed             seed file path
---pg-user          postgresql user (default: user)
---pg-password      postgresql password (default: password)
---skip-zero-cache  run pglite + proxy only, skip zero-cache
---log-level        error, warn, info, debug (default: info)
---s3               also start a local s3-compatible server
---s3-port          s3 server port (default: 9200)
+--pg-port=6434        postgresql proxy port
+--zero-port=5849      zero-cache port
+--data-dir=.orez      data directory
+--migrations=DIR      migrations directory (skipped if not set)
+--seed=FILE           seed file path
+--pg-user=user        postgresql user
+--pg-password=password postgresql password
+--skip-zero-cache     run pglite + proxy only, skip zero-cache
+--log-level=info      error, warn, info, debug
+--s3                  also start a local s3-compatible server
+--s3-port=9200        s3 server port
+--on-healthy=CMD      command to run once all services are healthy
 ```
 
 Subcommands for standalone servers:
 
 ```
-bunx orez s3 --port 9200 --data-dir .orez
+bunx orez s3 --port=9200 --data-dir=.orez
 ```
 
 ## Programmatic
