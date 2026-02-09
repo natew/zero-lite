@@ -198,8 +198,8 @@ export async function handleReplicationQuery(
   }
 
   if (upper.startsWith('CREATE_REPLICATION_SLOT')) {
-    const match = trimmed.match(/CREATE_REPLICATION_SLOT\s+"?(\w[^"\s]*)"?\s+/i)
-    const slotName = match?.[1] || 'zero_slot'
+    const match = trimmed.match(/CREATE_REPLICATION_SLOT\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i)
+    const slotName = match?.[1] || match?.[2] || match?.[3] || 'zero_slot'
     const lsn = lsnToString(nextLsn())
     const snapshotName = `00000003-00000001-1`
 
@@ -218,8 +218,8 @@ export async function handleReplicationQuery(
   }
 
   if (upper.startsWith('DROP_REPLICATION_SLOT')) {
-    const match = trimmed.match(/DROP_REPLICATION_SLOT\s+"?(\w[^"\s]*)"?/i)
-    const slotName = match?.[1]
+    const match = trimmed.match(/DROP_REPLICATION_SLOT\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i)
+    const slotName = match?.[1] || match?.[2] || match?.[3]
     if (slotName) {
       await db.query(`DELETE FROM public._zero_replication_slots WHERE slot_name = $1`, [
         slotName,
