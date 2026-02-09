@@ -1,6 +1,6 @@
 # orez
 
-[Zero](https://zero.rocicorp.dev) development backend powered by [PGlite](https://pglite.dev). Bundles PostgreSQL and zero-cache into a single process with zero native dependencies — both Postgres and SQLite run as WASM, so `bunx orez` just works. No Docker, no Postgres install, no `node-gyp`, no platform-specific binaries.
+[Zero](https://zero.rocicorp.dev) development backend powered by [PGlite](https://pglite.dev) and [bedrock-sqlite](https://www.npmjs.com/package/bedrock-sqlite). Bundles PostgreSQL and zero-cache into a single process with zero native dependencies — both Postgres and SQLite run as WASM, so `bunx orez` just works. No Docker, no Postgres install, no `node-gyp`, no platform-specific binaries.
 
 ```
 bunx orez
