@@ -16,6 +16,9 @@
       "import": "./dist/s3-local.js"
     }
   },
+  "bin": {
+    "orez": "./dist/cli.js"
+  },
   "files": [
     "dist",
     "src"
@@ -35,6 +38,7 @@
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",
+    "citty": "^0.2.0",
     "pg-gateway": "^0.3.0-beta.4"
   },
   "devDependencies": {
