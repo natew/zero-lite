@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./s3": {
+      "types": "./dist/s3-local.d.ts",
+      "import": "./dist/s3-local.js"
     }
   },
   "files": [
@@ -42,7 +46,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/natew/zero-lite"
+    "url": "https://github.com/natew/orez"
   },
   "keywords": [
     "zero",

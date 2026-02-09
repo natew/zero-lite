@@ -1,18 +1,17 @@
 # orez
 
-Drop-in replacement for the Docker-based development backend that Rocicorp's Zero requires. Instead of running PostgreSQL, zero-cache, and MinIO in Docker containers, orez bundles everything into a single process using PGlite (PostgreSQL compiled to WASM).
+Drop-in replacement for the Docker-based development backend that Rocicorp's Zero requires. Instead of running PostgreSQL and zero-cache in Docker containers, orez bundles everything into a single process using PGlite (PostgreSQL compiled to WASM).
 
 The goal is simple: `bun install && bun dev` with zero system dependencies.
 
 
 ## How it works
 
-orez starts four things in one process:
+orez starts three things in one process:
 
 1. A PGlite instance (full PostgreSQL 16 running in-process via WASM)
 2. A TCP proxy that speaks the PostgreSQL wire protocol, including logical replication
 3. A zero-cache child process that connects to the proxy thinking it's a real Postgres server
-4. A minimal S3-compatible HTTP server for file uploads
 
 The trick is in the TCP proxy. zero-cache needs logical replication to stay in sync with the upstream database. PGlite doesn't support logical replication natively, so orez fakes it. Every mutation is captured by triggers into a changes table, then encoded into the pgoutput binary protocol and streamed to zero-cache through the replication connection. zero-cache can't tell the difference.
 
@@ -42,7 +41,6 @@ import { startZeroLite } from 'orez'
 const { config, stop } = await startZeroLite({
   pgPort: 6434,
   zeroPort: 5849,
-  s3Port: 10201,
   migrationsDir: 'src/database/migrations',
   seedFile: 'src/database/seed.sql',
 })
@@ -92,7 +90,6 @@ This is a development tool. It is not suitable for production use.
 - Column types are all encoded as text in the replication stream. Zero-cache handles this, but other pgoutput consumers might not.
 - Triggers add overhead to every write. Again, fine for development.
 - PGlite stores data on the local filesystem. No replication, no backups, no high availability.
-- The S3 server is just a filesystem wrapper. No multipart uploads, no ACLs, no versioning.
 
 
 ## Project structure
@@ -103,12 +100,28 @@ src/
   config.ts             configuration with defaults
   pg-proxy.ts           tcp proxy with query rewriting
   pglite-manager.ts     pglite instance and migration runner
-  s3-local.ts           minimal s3 http server
+  s3-local.ts           standalone local s3 server (orez/s3)
   replication/
     handler.ts          replication protocol state machine
     pgoutput-encoder.ts binary pgoutput message encoder
     change-tracker.ts   trigger installation and change reader
 ```
+
+
+## Extra
+
+The other annoying dep we found ourselves needing often was s3, so we're exporting `orez/s3`. Its likewise a tiny, dev-only helper for avoiding heavy docker deps like minio.
+
+```typescript
+import { startS3Local } from 'orez/s3'
+
+const server = await startS3Local({
+  port: 9200,
+  dataDir: '.orez',
+})
+```
+
+Handles GET, PUT, DELETE, HEAD with CORS. Files stored on disk. No multipart, no ACLs, no versioning.
 
 
 ## License

@@ -11,7 +11,6 @@ async function main() {
     dataDir: join(import.meta.dir, '../../../.zero-lite-test'),
     pgPort: PG_PORT,
     zeroPort: 4850,
-    s3Port: 10203,
     webPort: WEB_PORT,
     migrationsDir: join(import.meta.dir, '../../src/database/migrations'),
     seedFile: '',

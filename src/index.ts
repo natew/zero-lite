@@ -1,9 +1,9 @@
 /**
  * orez: pglite-powered zero-sync development backend.
  *
- * starts a pglite instance, tcp proxy, s3 server, and zero-cache
- * process. replaces docker-based postgresql, zero-cache, and minio
- * with a single `bun run` command.
+ * starts a pglite instance, tcp proxy, and zero-cache process.
+ * replaces docker-based postgresql and zero-cache with a single
+ * `bun run` command.
  */
 
 import { resolve, join } from 'node:path'
@@ -18,13 +18,11 @@ import { spawn, type ChildProcess } from 'node:child_process'
 
 import type { PGlite } from '@electric-sql/pglite'
 import type { Server } from 'node:net'
-import type { Server as HttpServer } from 'node:http'
 
 import { getConfig, getConnectionString } from './config'
 import { installChangeTracking } from './replication/change-tracker'
 import { createPGliteInstance, runMigrations } from './pglite-manager'
 import { startPgProxy } from './pg-proxy'
-import { startS3Server } from './s3-local'
 
 import type { ZeroLiteConfig } from './config'
 
@@ -51,9 +49,6 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
   // start tcp proxy
   const pgServer = await startPgProxy(db, config)
 
-  // start s3 server
-  const s3Server = await startS3Server(config)
-
   // seed data if needed
   await seedIfNeeded(db, config)
 
@@ -76,7 +71,6 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
       zeroCacheProcess.kill('SIGTERM')
     }
     pgServer.close()
-    s3Server.close()
     await db.close()
     cleanupEnvLocal()
     console.info('[orez] stopped')
@@ -96,13 +90,10 @@ function writeEnvLocal(config: ZeroLiteConfig): void {
   const content = `${ENV_LOCAL_MARKER}
 VITE_PORT_POSTGRES=${config.pgPort}
 VITE_PORT_ZERO=${config.zeroPort}
-VITE_PORT_MINIO=${config.s3Port}
 VITE_PUBLIC_ZERO_SERVER="http://localhost:${config.zeroPort}"
 ZERO_UPSTREAM_DB="${upstreamUrl}"
 ZERO_CVR_DB="${cvrUrl}"
 ZERO_CHANGE_DB="${cdbUrl}"
-CLOUDFLARE_R2_ENDPOINT="http://localhost:${config.s3Port}"
-CLOUDFLARE_R2_PUBLIC_URL="http://localhost:${config.s3Port}"
 `
   writeFileSync(ENV_LOCAL_PATH, content)
   console.info('[orez] wrote .env.local for dev server')

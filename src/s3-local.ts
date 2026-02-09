@@ -1,6 +1,6 @@
 /**
  * minimal local s3-compatible server.
- * handles GET/PUT/DELETE/HEAD for object storage, replacing minio.
+ * handles GET/PUT/DELETE/HEAD for object storage.
  */
 
 import {
@@ -17,9 +17,12 @@ import {
   unlinkSync,
   statSync,
 } from 'node:fs'
-import { join, dirname, extname, resolve } from 'node:path'
+import { join, dirname, extname } from 'node:path'
 
-import type { ZeroLiteConfig } from './config'
+export interface S3LocalConfig {
+  port: number
+  dataDir: string
+}
 
 const MIME_TYPES: Record<string, string> = {
   '.jpg': 'image/jpeg',
@@ -30,21 +33,21 @@ const MIME_TYPES: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.json': 'application/json',
   '.txt': 'text/plain',
+  '.pdf': 'application/pdf',
+  '.mp4': 'video/mp4',
+  '.mp3': 'audio/mpeg',
 }
 
 function corsHeaders(): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods':
-      'GET, PUT, DELETE, HEAD, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, PUT, DELETE, HEAD, OPTIONS',
     'Access-Control-Allow-Headers': '*',
     'Access-Control-Expose-Headers': 'ETag, Content-Length',
   }
 }
 
-export function startS3Server(
-  config: ZeroLiteConfig
-): Promise<Server> {
+export function startS3Local(config: S3LocalConfig): Promise<Server> {
   const storageDir = join(config.dataDir, 's3')
   mkdirSync(storageDir, { recursive: true })
 
@@ -60,11 +63,16 @@ export function startS3Server(
 
       const url = new URL(
         req.url || '/',
-        `http://localhost:${config.s3Port}`
+        `http://localhost:${config.port}`
       )
-      const filePath = resolve(join(storageDir, url.pathname))
 
-      if (!filePath.startsWith(resolve(storageDir))) {
+      // sanitize path to prevent traversal
+      const normalized = url.pathname
+        .split('/')
+        .filter((s) => s && s !== '..' && s !== '.')
+        .join('/')
+      const filePath = join(storageDir, normalized)
+      if (!filePath.startsWith(storageDir)) {
         res.writeHead(403, headers)
         res.end()
         return
@@ -106,9 +114,7 @@ export function startS3Server(
               chunks.push(chunk)
             )
             req.on('end', () => {
-              mkdirSync(dirname(filePath), {
-                recursive: true,
-              })
+              mkdirSync(dirname(filePath), { recursive: true })
               const body = Buffer.concat(chunks)
               writeFileSync(filePath, body)
               res.writeHead(200, {
@@ -139,12 +145,11 @@ export function startS3Server(
               return
             }
             const stat = statSync(filePath)
-            const ext = extname(filePath)
+            const ext2 = extname(filePath)
             res.writeHead(200, {
               ...headers,
               'Content-Type':
-                MIME_TYPES[ext] ||
-                'application/octet-stream',
+                MIME_TYPES[ext2] || 'application/octet-stream',
               'Content-Length': stat.size.toString(),
             })
             res.end()
@@ -155,7 +160,7 @@ export function startS3Server(
             res.writeHead(405, headers)
             res.end()
         }
-      } catch (err) {
+      } catch {
         res.writeHead(500, {
           ...headers,
           'Content-Type': 'application/xml',
@@ -168,9 +173,9 @@ export function startS3Server(
   )
 
   return new Promise((resolve, reject) => {
-    server.listen(config.s3Port, '127.0.0.1', () => {
+    server.listen(config.port, '127.0.0.1', () => {
       console.info(
-        `[orez] local s3 listening on port ${config.s3Port}`
+        `[orez/s3] listening on port ${config.port}`
       )
       resolve(server)
     })
