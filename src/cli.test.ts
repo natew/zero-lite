@@ -21,16 +21,18 @@ function runCli(
 
 describe('cli', () => {
   it('shows help with --help', async () => {
-    const { stdout } = await runCli(['--help'])
-    expect(stdout).toContain('orez')
-    expect(stdout).toContain('--pg-port')
-    expect(stdout).toContain('--zero-port')
-    expect(stdout).toContain('--skip-zero-cache')
+    const { stdout, stderr } = await runCli(['--help'])
+    const output = stdout + stderr
+    expect(output).toContain('orez')
+    expect(output).toContain('--pg-port')
+    expect(output).toContain('--zero-port')
+    expect(output).toContain('--skip-zero-cache')
   })
 
   it('s3 subcommand shows help', async () => {
-    const { stdout } = await runCli(['s3', '--help'])
-    expect(stdout).toContain('--port')
-    expect(stdout).toContain('--data-dir')
+    const { stdout, stderr } = await runCli(['s3', '--help'])
+    const output = stdout + stderr
+    expect(output).toContain('--port')
+    expect(output).toContain('--data-dir')
   })
 })
