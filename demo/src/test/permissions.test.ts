@@ -70,7 +70,7 @@ test.describe('data integrity and security', () => {
     await expect(span).toBeVisible()
     const text = await span.textContent()
     expect(text).toContain('<img')
-    expect(await page.evaluate(() => document.title)).toBe('zerolite demo')
+    expect(await page.evaluate(() => document.title)).toBe('orez demo')
   })
 
   test('change tracking records insert update delete', async ({ request }) => {

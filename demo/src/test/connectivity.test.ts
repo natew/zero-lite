@@ -32,6 +32,6 @@ test.describe('connectivity', () => {
     await navigateTo(page, '/')
     await waitForApp(page)
     const title = await page.textContent('h1')
-    expect(title).toBe('zerolite demo')
+    expect(title).toBe('orez demo')
   })
 })

@@ -11,11 +11,11 @@ export async function createPGliteInstance(
   const dataPath = resolve(config.dataDir, 'pgdata')
   mkdirSync(dataPath, { recursive: true })
 
-  console.info(`[zerolite] creating pglite instance at ${dataPath}`)
+  console.info(`[orez] creating pglite instance at ${dataPath}`)
   const db = new PGlite(dataPath)
 
   await db.waitReady
-  console.info('[zerolite] pglite ready')
+  console.info('[orez] pglite ready')
 
   // create schemas for multi-db simulation
   await db.exec('CREATE SCHEMA IF NOT EXISTS zero_cvr')
@@ -42,7 +42,7 @@ export async function runMigrations(
 ): Promise<void> {
   const migrationsDir = resolve(config.migrationsDir)
   if (!existsSync(migrationsDir)) {
-    console.info('[zerolite] no migrations directory found, skipping')
+    console.info('[orez] no migrations directory found, skipping')
     return
   }
 
@@ -81,7 +81,7 @@ export async function runMigrations(
       continue
     }
 
-    console.info(`[zerolite] applying migration: ${name}`)
+    console.info(`[orez] applying migration: ${name}`)
     const sql = readFileSync(join(migrationsDir, file), 'utf-8')
 
     // split by drizzle's statement-breakpoint marker
@@ -98,8 +98,8 @@ export async function runMigrations(
       'INSERT INTO public.migrations (name) VALUES ($1)',
       [name]
     )
-    console.info(`[zerolite] applied migration: ${name}`)
+    console.info(`[orez] applied migration: ${name}`)
   }
 
-  console.info('[zerolite] migrations complete')
+  console.info('[orez] migrations complete')
 }

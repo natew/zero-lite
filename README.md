@@ -1,34 +1,34 @@
-# zero-pglite
+# orez
 
-Drop-in replacement for the Docker-based development backend that Rocicorp's Zero requires. Instead of running PostgreSQL, zero-cache, and MinIO in Docker containers, zero-pglite bundles everything into a single process using PGlite (PostgreSQL compiled to WASM).
+Drop-in replacement for the Docker-based development backend that Rocicorp's Zero requires. Instead of running PostgreSQL, zero-cache, and MinIO in Docker containers, orez bundles everything into a single process using PGlite (PostgreSQL compiled to WASM).
 
 The goal is simple: `bun install && bun dev` with zero system dependencies.
 
 
 ## How it works
 
-zero-pglite starts four things in one process:
+orez starts four things in one process:
 
 1. A PGlite instance (full PostgreSQL 16 running in-process via WASM)
 2. A TCP proxy that speaks the PostgreSQL wire protocol, including logical replication
 3. A zero-cache child process that connects to the proxy thinking it's a real Postgres server
 4. A minimal S3-compatible HTTP server for file uploads
 
-The trick is in the TCP proxy. zero-cache needs logical replication to stay in sync with the upstream database. PGlite doesn't support logical replication natively, so zero-pglite fakes it. Every mutation is captured by triggers into a changes table, then encoded into the pgoutput binary protocol and streamed to zero-cache through the replication connection. zero-cache can't tell the difference.
+The trick is in the TCP proxy. zero-cache needs logical replication to stay in sync with the upstream database. PGlite doesn't support logical replication natively, so orez fakes it. Every mutation is captured by triggers into a changes table, then encoded into the pgoutput binary protocol and streamed to zero-cache through the replication connection. zero-cache can't tell the difference.
 
-The proxy also handles multi-database routing. zero-cache expects three separate databases (upstream, CVR, change), but PGlite is a single database. zero-pglite maps database names to schemas, so `zero_cvr` becomes the `zero_cvr` schema and `zero_cdb` becomes `zero_cdb`.
+The proxy also handles multi-database routing. zero-cache expects three separate databases (upstream, CVR, change), but PGlite is a single database. orez maps database names to schemas, so `zero_cvr` becomes the `zero_cvr` schema and `zero_cdb` becomes `zero_cdb`.
 
 
 ## Install
 
 ```
-npm install zero-pglite
+npm install orez
 ```
 
 or with bun:
 
 ```
-bun add zero-pglite
+bun add orez
 ```
 
 You also need `@rocicorp/zero` installed in your project for the zero-cache binary.
@@ -37,7 +37,7 @@ You also need `@rocicorp/zero` installed in your project for the zero-cache bina
 ## Usage
 
 ```typescript
-import { startZeroLite } from 'zero-pglite'
+import { startZeroLite } from 'orez'
 
 const { config, stop } = await startZeroLite({
   pgPort: 6434,

@@ -6,7 +6,7 @@ const PG_PORT = 6436
 const WEB_PORT = 3457
 
 async function main() {
-  console.info('starting zerolite...')
+  console.info('starting orez...')
   const lite = await startZeroLite({
     dataDir: join(import.meta.dir, '../../../.zero-lite-test'),
     pgPort: PG_PORT,

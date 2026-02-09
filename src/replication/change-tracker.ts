@@ -90,7 +90,7 @@ async function installTriggersOnAllTables(db: PGlite): Promise<void> {
     count++
   }
 
-  console.info(`[zero-lite] installed change tracking triggers on ${count} tables`)
+  console.info(`[orez] installed change tracking triggers on ${count} tables`)
 }
 
 export async function getChangesSince(

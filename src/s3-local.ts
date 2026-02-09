@@ -170,7 +170,7 @@ export function startS3Server(
   return new Promise((resolve, reject) => {
     server.listen(config.s3Port, '127.0.0.1', () => {
       console.info(
-        `[zerolite] local s3 listening on port ${config.s3Port}`
+        `[orez] local s3 listening on port ${config.s3Port}`
       )
       resolve(server)
     })

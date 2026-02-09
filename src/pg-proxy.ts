@@ -321,7 +321,7 @@ export async function startPgProxy(
           }
           dbName = params?.database || 'postgres'
           console.info(
-            `[zerolite] new connection: db=${dbName} user=${params?.user} replication=${params?.replication || 'none'}`
+            `[orez] new connection: db=${dbName} user=${params?.user} replication=${params?.replication || 'none'}`
           )
           await db.waitReady
         },
@@ -342,7 +342,7 @@ export async function startPgProxy(
                 .decode(data.subarray(5, 1 + len - 1))
                 .replace(/\0$/, '')
               console.info(
-                `[zerolite] repl query: ${query.slice(0, 200)}`
+                `[orez] repl query: ${query.slice(0, 200)}`
               )
             }
             return handleReplicationMessage(
@@ -399,7 +399,7 @@ export async function startPgProxy(
   return new Promise((resolve, reject) => {
     server.listen(config.pgPort, '127.0.0.1', () => {
       console.info(
-        `[zerolite] pg proxy listening on port ${config.pgPort}`
+        `[orez] pg proxy listening on port ${config.pgPort}`
       )
       resolve(server)
     })
@@ -447,7 +447,7 @@ async function handleReplicationMessage(
 
     handleStartReplication(query, writer, db).catch((err) => {
       console.info(
-        `[zerolite] replication stream ended: ${err}`
+        `[orez] replication stream ended: ${err}`
       )
     })
     return undefined

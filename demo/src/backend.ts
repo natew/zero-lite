@@ -12,7 +12,7 @@ const lite = await startZeroLite({
   skipZeroCache: true,
 })
 
-console.info('zerolite backend running on port 6435')
+console.info('orez backend running on port 6435')
 console.info('press ctrl+c to stop')
 
 process.on('SIGINT', async () => {
