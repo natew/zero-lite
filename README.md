@@ -146,23 +146,6 @@ The proxy intercepts several things to convince zero-cache it's talking to a rea
 
 The pgoutput encoder produces spec-compliant binary messages: Begin, Relation, Insert, Update, Delete, Commit, and Keepalive. All column values are encoded as text (typeOid 25), which zero-cache handles fine since it re-maps types downstream anyway.
 
-## Extra: orez/s3
-
-Local s3-compatible server for dev. Avoids needing Docker or MinIO.
-
-```typescript
-import { startS3Local } from 'orez/s3'
-
-const server = await startS3Local({
-  port: 9200,
-  dataDir: '.orez',
-})
-```
-
-Or via CLI: `bunx orez --s3` or standalone `bunx orez s3`.
-
-Handles GET, PUT, DELETE, HEAD with CORS. Files stored on disk. No multipart, no ACLs, no versioning.
-
 ## Tests
 
 119 tests — 82 orez tests across 6 test files covering the full stack from binary encoding to TCP-level integration, plus 37 bedrock-sqlite tests covering the WASM SQLite engine:
@@ -212,6 +195,23 @@ sqlite-wasm/
   test/
     database.test.ts    37 tests for the wasm sqlite engine
 ```
+
+## Extra: orez/s3
+
+Local s3-compatible server for dev. Avoids needing Docker or MinIO.
+
+```typescript
+import { startS3Local } from 'orez/s3'
+
+const server = await startS3Local({
+  port: 9200,
+  dataDir: '.orez',
+})
+```
+
+Or via CLI: `bunx orez --s3` or standalone `bunx orez s3`.
+
+Handles GET, PUT, DELETE, HEAD with CORS. Files stored on disk. No multipart, no ACLs, no versioning.
 
 ## License
 
