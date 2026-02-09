@@ -8,6 +8,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { basename, dirname, resolve } from 'node:path'
 
 import { getConfig, getConnectionString } from './config.js'
@@ -22,6 +23,19 @@ import type { PGlite } from '@electric-sql/pglite'
 
 export { getConfig, getConnectionString } from './config.js'
 export type { LogLevel, ZeroLiteConfig } from './config.js'
+
+// resolve a package entry — import.meta.resolve doesn't work in vitest
+function resolvePackage(pkg: string): string {
+  try {
+    const resolved = import.meta.resolve(pkg)
+    if (resolved) return resolved.replace('file://', '')
+  } catch {}
+  try {
+    const require = createRequire(import.meta.url)
+    return require.resolve(pkg)
+  } catch {}
+  return ''
+}
 
 export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
   const config = getConfig(overrides)
@@ -231,12 +245,12 @@ function patchSqliteForWasm(): void {
     // find the package — import.meta.resolve may fail if native build
     // didn't produce lib/index.js, so fall back to manual lookup
     let libDir: string
-    try {
-      const entry = import.meta.resolve('@rocicorp/zero-sqlite3').replace('file://', '')
-      libDir = resolve(entry, '..')
-    } catch {
+    const sqliteEntry = resolvePackage('@rocicorp/zero-sqlite3')
+    if (sqliteEntry) {
+      libDir = resolve(sqliteEntry, '..')
+    } else {
       // native build likely failed, find package via @rocicorp/zero
-      const zeroEntry = import.meta.resolve('@rocicorp/zero').replace('file://', '')
+      const zeroEntry = resolvePackage('@rocicorp/zero')
       // walk up to find the actual node_modules dir (entry depth varies)
       let nodeModules = dirname(zeroEntry)
       while (nodeModules !== '/' && basename(nodeModules) !== 'node_modules') {
@@ -259,7 +273,7 @@ function patchSqliteForWasm(): void {
     }
 
     // resolve bedrock-sqlite's dist entry point
-    const bedrockEntry = import.meta.resolve('bedrock-sqlite').replace('file://', '')
+    const bedrockEntry = resolvePackage('bedrock-sqlite')
     if (!existsSync(bedrockEntry)) {
       log.orez('bedrock-sqlite not found, skipping wasm patch')
       return
@@ -346,21 +360,7 @@ module.exports.SqliteError = SqliteError;
 
 async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
   // resolve @rocicorp/zero entry for finding zero-cache modules
-  let zeroEntry = ''
-  try {
-    zeroEntry = import.meta.resolve('@rocicorp/zero').replace('file://', '')
-  } catch {
-    // package not resolvable via import.meta.resolve (e.g. in vitest)
-  }
-  if (!zeroEntry) {
-    try {
-      const { createRequire } = await import('node:module')
-      const require = createRequire(import.meta.url)
-      zeroEntry = require.resolve('@rocicorp/zero')
-    } catch {
-      // still not resolvable
-    }
-  }
+  const zeroEntry = resolvePackage('@rocicorp/zero')
 
   if (!zeroEntry) {
     throw new Error('zero-cache binary not found. install @rocicorp/zero')
@@ -391,6 +391,9 @@ async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
   const env: Record<string, string> = {
     ...defaults,
     ...(process.env as Record<string, string>),
+    // orez is a development tool — always run zero-cache in development mode
+    // to avoid production requirements like --admin-password
+    NODE_ENV: 'development',
     ZERO_UPSTREAM_DB: upstreamUrl,
     ZERO_CVR_DB: cvrUrl,
     ZERO_CHANGE_DB: cdbUrl,
