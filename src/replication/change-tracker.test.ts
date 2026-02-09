@@ -87,10 +87,16 @@ describe('change-tracker', () => {
     expect(limited).toHaveLength(3)
   })
 
+  it('getCurrentWatermark returns 0 before any inserts', async () => {
+    const wm = await getCurrentWatermark(db)
+    expect(wm).toBe(0)
+  })
+
   it('getCurrentWatermark advances', async () => {
     // first insert consumes the initial sequence value
     await db.exec(`INSERT INTO public.items (name, value) VALUES ('x', 1)`)
     const before = await getCurrentWatermark(db)
+    expect(before).toBeGreaterThan(0)
     await db.exec(`INSERT INTO public.items (name, value) VALUES ('y', 2)`)
     const after = await getCurrentWatermark(db)
     expect(after).toBeGreaterThan(before)
@@ -156,5 +162,18 @@ describe('change-tracker', () => {
     const changes = await getChangesSince(db, 0)
     const ops = changes.map((c) => c.op)
     expect(ops).toEqual(['INSERT', 'UPDATE', 'INSERT', 'DELETE'])
+  })
+
+  it('tracks tables with special characters in names', async () => {
+    await db.exec(`CREATE TABLE public."my""table" (id SERIAL PRIMARY KEY, val TEXT)`)
+    await installChangeTracking(db)
+
+    await db.exec(`INSERT INTO public."my""table" (val) VALUES ('works')`)
+
+    const changes = await getChangesSince(db, 0)
+    const special = changes.filter((c) => c.table_name === 'my"table')
+    expect(special).toHaveLength(1)
+    expect(special[0].op).toBe('INSERT')
+    expect(special[0].row_data).toMatchObject({ val: 'works' })
   })
 })

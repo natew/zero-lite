@@ -61,11 +61,14 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
   writeEnvLocal(config)
 
   // start zero-cache
-  console.info('[zerolite] starting zero-cache...')
-  const zeroCacheProcess = await startZeroCache(config)
-
-  // wait for zero-cache to be healthy
-  await waitForZeroCache(config)
+  let zeroCacheProcess: ChildProcess | null = null
+  if (!config.skipZeroCache) {
+    console.info('[zerolite] starting zero-cache...')
+    zeroCacheProcess = await startZeroCache(config)
+    await waitForZeroCache(config)
+  } else {
+    console.info('[zerolite] skipping zero-cache (skipZeroCache=true)')
+  }
 
   const stop = async () => {
     console.info('[zerolite] shutting down...')

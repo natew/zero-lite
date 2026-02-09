@@ -25,6 +25,7 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "check": "tsc --noEmit",
+    "demo:test": "bun demo/src/test/run-e2e.ts",
     "check:all": "bun run lint && bun run format:check && bun run check && bun run test",
     "release": "bun scripts/release.ts"
   },

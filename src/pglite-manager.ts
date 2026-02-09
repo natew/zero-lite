@@ -29,7 +29,8 @@ export async function createPGliteInstance(
     [pubName]
   )
   if (Number(pubs.rows[0].count) === 0) {
-    await db.exec(`CREATE PUBLICATION ${pubName} FOR ALL TABLES`)
+    const quoted = '"' + pubName.replace(/"/g, '""') + '"'
+    await db.exec(`CREATE PUBLICATION ${quoted} FOR ALL TABLES`)
   }
 
   return db

@@ -66,6 +66,10 @@ export async function installChangeTracking(db: PGlite): Promise<void> {
   await installTriggersOnAllTables(db)
 }
 
+function quoteIdent(name: string): string {
+  return '"' + name.replace(/"/g, '""') + '"'
+}
+
 async function installTriggersOnAllTables(db: PGlite): Promise<void> {
   const tables = await db.query<{ tablename: string }>(
     `SELECT tablename FROM pg_tables
@@ -76,10 +80,11 @@ async function installTriggersOnAllTables(db: PGlite): Promise<void> {
 
   let count = 0
   for (const { tablename } of tables.rows) {
+    const quoted = quoteIdent(tablename)
     await db.exec(`
-      DROP TRIGGER IF EXISTS _zero_change_trigger ON public."${tablename}";
+      DROP TRIGGER IF EXISTS _zero_change_trigger ON public.${quoted};
       CREATE TRIGGER _zero_change_trigger
-        AFTER INSERT OR UPDATE OR DELETE ON public."${tablename}"
+        AFTER INSERT OR UPDATE OR DELETE ON public.${quoted}
         FOR EACH ROW EXECUTE FUNCTION public._zero_track_change();
     `)
     count++
@@ -101,6 +106,10 @@ export async function getChangesSince(
 }
 
 export async function getCurrentWatermark(db: PGlite): Promise<number> {
-  const result = await db.query<{ last_value: string }>('SELECT last_value FROM public._zero_watermark')
-  return Number(result.rows[0].last_value)
+  const result = await db.query<{ last_value: string; is_called: boolean }>(
+    'SELECT last_value, is_called FROM public._zero_watermark'
+  )
+  const { last_value, is_called } = result.rows[0]
+  if (!is_called) return 0
+  return Number(last_value)
 }

@@ -1,0 +1,16 @@
+{
+  "name": "zerolite-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --hot src/server.ts",
+    "backend": "bun src/backend.ts",
+    "test": "bun src/test/run-e2e.ts"
+  },
+  "dependencies": {
+    "postgres": "^3.4.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0"
+  }
+}

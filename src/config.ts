@@ -8,6 +8,7 @@ export interface ZeroLiteConfig {
   pgPassword: string
   migrationsDir: string
   seedFile: string
+  skipZeroCache: boolean
 }
 
 export function getConfig(
@@ -27,6 +28,7 @@ export function getConfig(
     migrationsDir:
       overrides.migrationsDir || 'src/database/migrations',
     seedFile: overrides.seedFile || 'src/database/seed.sql',
+    skipZeroCache: overrides.skipZeroCache || false,
   }
 }
 
