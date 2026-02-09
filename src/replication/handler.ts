@@ -302,6 +302,49 @@ export async function handleStartReplication(
     `)
   }
 
+  // build primary key lookup for all public tables
+  const tableKeyColumns = new Map<string, Set<string>>()
+  const pkResult = await db.query<{ table_name: string; column_name: string }>(
+    `SELECT tc.table_name, kcu.column_name
+     FROM information_schema.table_constraints tc
+     JOIN information_schema.key_column_usage kcu
+       ON tc.constraint_name = kcu.constraint_name
+       AND tc.table_schema = kcu.table_schema
+     WHERE tc.constraint_type = 'PRIMARY KEY'
+       AND tc.table_schema = 'public'`
+  )
+  for (const { table_name, column_name } of pkResult.rows) {
+    let keys = tableKeyColumns.get(table_name)
+    if (!keys) {
+      keys = new Set()
+      tableKeyColumns.set(table_name, keys)
+    }
+    keys.add(column_name)
+  }
+  log.debug.proxy(`loaded primary keys for ${tableKeyColumns.size} tables`)
+
+  // build excluded columns lookup (types zero-cache can't handle)
+  const excludedColumns = new Map<string, Set<string>>()
+  const UNSUPPORTED_TYPES = new Set(['tsvector', 'tsquery', 'USER-DEFINED'])
+  const colResult = await db.query<{ table_name: string; column_name: string; data_type: string }>(
+    `SELECT table_name, column_name, data_type
+     FROM information_schema.columns
+     WHERE table_schema = 'public'`
+  )
+  for (const { table_name, column_name, data_type } of colResult.rows) {
+    if (UNSUPPORTED_TYPES.has(data_type)) {
+      let cols = excludedColumns.get(table_name)
+      if (!cols) {
+        cols = new Set()
+        excludedColumns.set(table_name, cols)
+      }
+      cols.add(column_name)
+    }
+  }
+  if (excludedColumns.size > 0) {
+    log.debug.proxy(`excluding unsupported columns: ${[...excludedColumns.entries()].map(([t, c]) => `${t}(${[...c].join(',')})`).join(', ')}`)
+  }
+
   // track which tables we've sent RELATION messages for
   const sentRelations = new Set<string>()
   let txCounter = 1
@@ -316,7 +359,7 @@ export async function handleStartReplication(
         const changes = await getChangesSince(db, lastWatermark, 100)
 
         if (changes.length > 0) {
-          await streamChanges(changes, writer, sentRelations, txCounter++)
+          await streamChanges(changes, writer, sentRelations, txCounter++, tableKeyColumns, excludedColumns)
           lastWatermark = changes[changes.length - 1].watermark
         }
 
@@ -346,7 +389,9 @@ async function streamChanges(
   changes: ChangeRecord[],
   writer: ReplicationWriter,
   sentRelations: Set<string>,
-  txId: number
+  txId: number,
+  tableKeyColumns: Map<string, Set<string>>,
+  excludedColumns: Map<string, Set<string>>
 ): Promise<void> {
   const ts = nowMicros()
   const lsn = nextLsn()
@@ -357,10 +402,32 @@ async function streamChanges(
 
   for (const change of changes) {
     const tableOid = getTableOid(change.table_name)
-    const row = change.row_data || change.old_data
+    const excluded = excludedColumns.get(change.table_name)
+
+    // filter out unsupported columns from row data
+    let rowData = change.row_data
+    let oldData = change.old_data
+    if (excluded && excluded.size > 0) {
+      if (rowData) {
+        rowData = Object.fromEntries(
+          Object.entries(rowData).filter(([k]) => !excluded.has(k))
+        )
+      }
+      if (oldData) {
+        oldData = Object.fromEntries(
+          Object.entries(oldData).filter(([k]) => !excluded.has(k))
+        )
+      }
+    }
+
+    const row = rowData || oldData
     if (!row) continue
 
-    const columns = inferColumns(row)
+    const keySet = tableKeyColumns.get(change.table_name)
+    const columns = inferColumns(row).map((col) => ({
+      ...col,
+      isKey: keySet?.has(col.name) ?? false,
+    }))
 
     // send RELATION if not yet sent
     if (!sentRelations.has(change.table_name)) {
@@ -373,16 +440,16 @@ async function streamChanges(
     let changeMsg: Uint8Array | null = null
     switch (change.op) {
       case 'INSERT':
-        if (!change.row_data) continue
-        changeMsg = encodeInsert(tableOid, change.row_data, columns)
+        if (!rowData) continue
+        changeMsg = encodeInsert(tableOid, rowData, columns)
         break
       case 'UPDATE':
-        if (!change.row_data) continue
-        changeMsg = encodeUpdate(tableOid, change.row_data, change.old_data, columns)
+        if (!rowData) continue
+        changeMsg = encodeUpdate(tableOid, rowData, oldData, columns)
         break
       case 'DELETE':
-        if (!change.old_data) continue
-        changeMsg = encodeDelete(tableOid, change.old_data, columns)
+        if (!oldData) continue
+        changeMsg = encodeDelete(tableOid, oldData, columns)
         break
       default:
         continue

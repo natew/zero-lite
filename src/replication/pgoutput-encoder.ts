@@ -27,6 +27,7 @@ export interface ColumnInfo {
   name: string
   typeOid: number
   typeMod: number
+  isKey?: boolean
 }
 
 // infer columns from a jsonb row
@@ -119,7 +120,7 @@ export function encodeRelation(
   pos += 2
 
   for (let i = 0; i < columns.length; i++) {
-    buf[pos++] = 0 // flags
+    buf[pos++] = columns[i].isKey ? 1 : 0 // flags: 1 = part of replica identity key
     buf.set(colNameBytes[i], pos)
     pos += colNameBytes[i].length
     buf[pos++] = 0
