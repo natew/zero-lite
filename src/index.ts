@@ -153,28 +153,14 @@ async function seedIfNeeded(db: PGlite, config: ZeroLiteConfig): Promise<void> {
 }
 
 async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
-  // resolve @rocicorp/zero package location, then find the binary
+  // resolve @rocicorp/zero entry, cli.js is right next to it
   let zeroCacheBin = ''
   try {
-    const zeroPkg = import.meta.resolve('@rocicorp/zero')
-    const zeroDir = resolve(zeroPkg.replace('file://', ''), '..')
-    const bin = resolve(zeroDir, 'out/zero-cache/src/bin/main.js')
+    const entry = import.meta.resolve('@rocicorp/zero').replace('file://', '')
+    const bin = resolve(entry, '..', 'cli.js')
     if (existsSync(bin)) zeroCacheBin = bin
   } catch {
-    // fallback to node_modules paths
-  }
-
-  if (!zeroCacheBin) {
-    const fallbacks = [
-      resolve('node_modules/.bin/zero-cache'),
-      resolve('node_modules/@rocicorp/zero/out/zero-cache/src/bin/main.js'),
-    ]
-    for (const p of fallbacks) {
-      if (existsSync(p)) {
-        zeroCacheBin = p
-        break
-      }
-    }
+    // package not resolvable
   }
 
   if (!zeroCacheBin) {
