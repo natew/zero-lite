@@ -41,41 +41,6 @@ const s3Command = defineCommand({
   },
 })
 
-const bunnyCommand = defineCommand({
-  meta: {
-    name: 'bunny',
-    description: 'start a local bunny cdn storage-compatible server',
-  },
-  args: {
-    port: {
-      type: 'string',
-      description: 'port to listen on',
-      default: '3533',
-    },
-    'data-dir': {
-      type: 'string',
-      description: 'data directory for stored files',
-      default: '.orez',
-    },
-  },
-  async run({ args }) {
-    const { startBunnyLocal } = await import('./bunny-local.js')
-    const server = await startBunnyLocal({
-      port: Number(args.port),
-      dataDir: args['data-dir'],
-    })
-
-    process.on('SIGINT', () => {
-      server.close()
-      process.exit(0)
-    })
-    process.on('SIGTERM', () => {
-      server.close()
-      process.exit(0)
-    })
-  },
-})
-
 const main = defineCommand({
   meta: {
     name: 'orez',
@@ -137,16 +102,6 @@ const main = defineCommand({
       description: 's3 server port',
       default: '9200',
     },
-    bunny: {
-      type: 'boolean',
-      description: 'also start a local bunny cdn storage-compatible server',
-      default: false,
-    },
-    'bunny-port': {
-      type: 'string',
-      description: 'bunny storage server port',
-      default: '3533',
-    },
     'on-healthy': {
       type: 'string',
       description: 'command to run once all services are healthy',
@@ -155,7 +110,6 @@ const main = defineCommand({
   },
   subCommands: {
     s3: s3Command,
-    bunny: bunnyCommand,
   },
   async run({ args }) {
     const { config, stop } = await startZeroLite({
@@ -175,15 +129,6 @@ const main = defineCommand({
       const { startS3Local } = await import('./s3-local.js')
       s3Server = await startS3Local({
         port: Number(args['s3-port']),
-        dataDir: args['data-dir'],
-      })
-    }
-
-    let bunnyServer: import('node:http').Server | null = null
-    if (args.bunny) {
-      const { startBunnyLocal } = await import('./bunny-local.js')
-      bunnyServer = await startBunnyLocal({
-        port: Number(args['bunny-port']),
         dataDir: args['data-dir'],
       })
     }
@@ -215,13 +160,11 @@ const main = defineCommand({
     }
 
     process.on('SIGINT', async () => {
-      bunnyServer?.close()
       s3Server?.close()
       await stop()
       process.exit(0)
     })
     process.on('SIGTERM', async () => {
-      bunnyServer?.close()
       s3Server?.close()
       await stop()
       process.exit(0)

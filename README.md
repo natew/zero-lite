@@ -36,15 +36,12 @@ bunx orez
 --log-level        error, warn, info, debug (default: info)
 --s3               also start a local s3-compatible server
 --s3-port          s3 server port (default: 9200)
---bunny            also start a local bunny cdn storage-compatible server
---bunny-port       bunny storage server port (default: 3533)
 ```
 
 Subcommands for standalone servers:
 
 ```
 bunx orez s3 --port 9200 --data-dir .orez
-bunx orez bunny --port 3533 --data-dir .orez
 ```
 
 ## Programmatic
@@ -80,14 +77,12 @@ export default {
       zeroPort: 5849,
       migrationsDir: 'src/database/migrations',
       s3: true,
-      bunny: true,
-      bunnyPort: 3533,
     }),
   ],
 }
 ```
 
-Starts orez when vite dev server starts, stops on close. Pass `s3: true` or `bunny: true` to also start local storage servers.
+Starts orez when vite dev server starts, stops on close. Pass `s3: true` to also start a local storage server.
 
 ## How it works
 
@@ -168,23 +163,6 @@ Or via CLI: `bunx orez --s3` or standalone `bunx orez s3`.
 
 Handles GET, PUT, DELETE, HEAD with CORS. Files stored on disk. No multipart, no ACLs, no versioning.
 
-## Extra: orez/bunny
-
-Local Bunny CDN storage-compatible server for dev. Drop-in replacement for Bunny's storage API.
-
-```typescript
-import { startBunnyLocal } from 'orez/bunny'
-
-const server = await startBunnyLocal({
-  port: 3533,
-  dataDir: '.orez',
-})
-```
-
-Or via CLI: `bunx orez --bunny` or standalone `bunx orez bunny`.
-
-Handles GET, PUT, DELETE, HEAD with CORS, plus directory listing. Files stored on disk.
-
 ## Tests
 
 119 tests — 82 orez tests across 6 test files covering the full stack from binary encoding to TCP-level integration, plus 37 bedrock-sqlite tests covering the WASM SQLite engine:
@@ -219,7 +197,6 @@ src/
   pg-proxy.ts           tcp proxy with query rewriting
   pglite-manager.ts     pglite instance and migration runner
   s3-local.ts           local s3-compatible server (orez/s3)
-  bunny-local.ts        local bunny cdn storage server (orez/bunny)
   vite-plugin.ts        vite dev server plugin (orez/vite)
   replication/
     handler.ts          replication protocol state machine

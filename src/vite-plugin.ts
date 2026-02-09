@@ -7,14 +7,11 @@ import type { Plugin } from 'vite'
 export interface OrezPluginOptions extends Partial<ZeroLiteConfig> {
   s3?: boolean
   s3Port?: number
-  bunny?: boolean
-  bunnyPort?: number
 }
 
 export default function orez(options?: OrezPluginOptions): Plugin {
   let stop: (() => Promise<void>) | null = null
   let s3Server: Server | null = null
-  let bunnyServer: Server | null = null
 
   return {
     name: 'orez',
@@ -31,16 +28,7 @@ export default function orez(options?: OrezPluginOptions): Plugin {
         })
       }
 
-      if (options?.bunny) {
-        const { startBunnyLocal } = await import('./bunny-local.js')
-        bunnyServer = await startBunnyLocal({
-          port: options.bunnyPort || 3533,
-          dataDir: result.config.dataDir,
-        })
-      }
-
       server.httpServer?.on('close', async () => {
-        bunnyServer?.close()
         s3Server?.close()
         if (stop) {
           await stop()
