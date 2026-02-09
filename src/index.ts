@@ -211,7 +211,16 @@ var Database = mod.Database;
 var SqliteError = mod.SqliteError;
 
 // patch methods zero-cache needs but bedrock-sqlite doesn't have
-if (!Database.prototype.unsafeMode) Database.prototype.unsafeMode = function() { return this; };
+// set busy_timeout on every db open - wasm vfs can't share locks between processes,
+// so retrying on SQLITE_BUSY prevents "database is locked" errors
+Database.prototype.unsafeMode = function() {
+  try {
+    this.pragma('busy_timeout = 5000');
+    this.pragma('journal_mode = wal');
+    this.pragma('synchronous = normal');
+  } catch(e) {}
+  return this;
+};
 if (!Database.prototype.defaultSafeIntegers) Database.prototype.defaultSafeIntegers = function() { return this; };
 if (!Database.prototype.serialize) Database.prototype.serialize = function() { throw new Error('not supported in wasm'); };
 if (!Database.prototype.backup) Database.prototype.backup = function() { throw new Error('not supported in wasm'); };

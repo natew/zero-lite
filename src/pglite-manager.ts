@@ -2,8 +2,8 @@ import { readFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 import { PGlite } from '@electric-sql/pglite'
-import { vector } from '@electric-sql/pglite/vector'
 import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm'
+import { vector } from '@electric-sql/pglite/vector'
 
 import { log } from './log.js'
 
@@ -14,10 +14,15 @@ export async function createPGliteInstance(config: ZeroLiteConfig): Promise<PGli
   mkdirSync(dataPath, { recursive: true })
 
   log.pglite(`creating instance at ${dataPath}`)
-  const { dataDir: _d, debug: _dbg, ...userOpts } = config.pgliteOptions as Record<string, any>
+  const {
+    dataDir: _d,
+    debug: _dbg,
+    ...userOpts
+  } = config.pgliteOptions as Record<string, any>
   const db = new PGlite({
     dataDir: dataPath,
     debug: config.logLevel === 'debug' ? 1 : 0,
+    relaxedDurability: true,
     ...userOpts,
     extensions: userOpts.extensions || { vector, pg_trgm },
   })

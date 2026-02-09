@@ -7,10 +7,15 @@ const Database = mod.Database
 const SqliteError = mod.SqliteError
 
 // patch Database.prototype with methods zero-cache uses but bedrock-sqlite doesn't have
-if (!Database.prototype.unsafeMode) {
-  Database.prototype.unsafeMode = function () {
-    return this
-  }
+// set busy_timeout on every db open - wasm vfs can't share locks between processes,
+// so retrying on SQLITE_BUSY prevents "database is locked" errors
+Database.prototype.unsafeMode = function () {
+  try {
+    this.pragma('busy_timeout = 5000')
+    this.pragma('journal_mode = wal')
+    this.pragma('synchronous = normal')
+  } catch {}
+  return this
 }
 if (!Database.prototype.defaultSafeIntegers) {
   Database.prototype.defaultSafeIntegers = function () {
