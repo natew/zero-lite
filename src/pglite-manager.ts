@@ -12,7 +12,10 @@ export async function createPGliteInstance(config: ZeroLiteConfig): Promise<PGli
   mkdirSync(dataPath, { recursive: true })
 
   log.pglite(`creating instance at ${dataPath}`)
-  const db = new PGlite(dataPath)
+  const db = new PGlite({
+    dataDir: dataPath,
+    debug: config.logLevel === 'debug' ? 1 : 0,
+  })
 
   await db.waitReady
   log.pglite('ready')

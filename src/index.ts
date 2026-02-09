@@ -21,7 +21,7 @@ import type { ZeroLiteConfig } from './config.js'
 import type { PGlite } from '@electric-sql/pglite'
 import type { Server } from 'node:net'
 
-export type { ZeroLiteConfig } from './config.js'
+export type { ZeroLiteConfig, LogLevel } from './config.js'
 export { getConfig, getConnectionString } from './config.js'
 
 export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
@@ -178,7 +178,7 @@ async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
   // defaults that can be overridden by user env
   const defaults: Record<string, string> = {
     NODE_ENV: 'development',
-    ZERO_LOG_LEVEL: 'info',
+    ZERO_LOG_LEVEL: config.logLevel,
     ZERO_NUM_SYNC_WORKERS: '1',
   }
 

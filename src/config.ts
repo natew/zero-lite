@@ -1,3 +1,5 @@
+export type LogLevel = 'error' | 'warn' | 'info' | 'debug'
+
 export interface ZeroLiteConfig {
   dataDir: string
   pgPort: number
@@ -7,6 +9,7 @@ export interface ZeroLiteConfig {
   migrationsDir: string
   seedFile: string
   skipZeroCache: boolean
+  logLevel: LogLevel
 }
 
 export function getConfig(overrides: Partial<ZeroLiteConfig> = {}): ZeroLiteConfig {
@@ -19,6 +22,7 @@ export function getConfig(overrides: Partial<ZeroLiteConfig> = {}): ZeroLiteConf
     migrationsDir: overrides.migrationsDir || 'src/database/migrations',
     seedFile: overrides.seedFile || 'src/database/seed.sql',
     skipZeroCache: overrides.skipZeroCache || false,
+    logLevel: overrides.logLevel || 'info',
   }
 }
 

@@ -1,8 +1,8 @@
 # orez
 
-Drop-in replacement for the Docker-based development backend that Rocicorp's Zero requires. Instead of running PostgreSQL and zero-cache in Docker containers, orez bundles everything into a single process using PGlite (PostgreSQL compiled to WASM).
+[Zero](https://zero.rocicorp.dev) development backend powered by [PGlite](https://pglite.dev). Bundles PostgreSQL and zero-cache into a single process with no system dependencies.
 
-The goal is simple: `bun install && bun dev` with zero system dependencies.
+`bun install && bun dev` — that's it.
 
 ## How it works
 
@@ -41,6 +41,7 @@ Starts PGlite, the TCP proxy, and zero-cache. Ports auto-increment if already in
 --pg-user          postgresql user (default: user)
 --pg-password      postgresql password (default: password)
 --skip-zero-cache  run pglite + proxy only, skip zero-cache
+--log-level        error, warn, info, debug (default: info)
 ```
 
 S3 subcommand:
@@ -98,7 +99,7 @@ orez provides sensible defaults for a few variables:
 | Variable | Default | Overridable |
 |----------|---------|-------------|
 | `NODE_ENV` | `development` | yes |
-| `ZERO_LOG_LEVEL` | `info` | yes |
+| `ZERO_LOG_LEVEL` | from `--log-level` | yes |
 | `ZERO_NUM_SYNC_WORKERS` | `1` | yes |
 | `ZERO_UPSTREAM_DB` | *(managed by orez)* | no |
 | `ZERO_CVR_DB` | *(managed by orez)* | no |
@@ -106,7 +107,9 @@ orez provides sensible defaults for a few variables:
 | `ZERO_REPLICA_FILE` | *(managed by orez)* | no |
 | `ZERO_PORT` | *(managed by orez)* | no |
 
-The layering is: orez defaults → your env → orez-managed connection vars. So setting `ZERO_LOG_LEVEL=debug` in your shell overrides the default, but you can't override the database connection strings (orez needs to point zero-cache at its own proxy).
+The `--log-level` flag controls both zero-cache (`ZERO_LOG_LEVEL`) and PGlite's debug output. Setting it to `debug` enables verbose logging from both.
+
+The layering is: orez defaults → your env → orez-managed connection vars. So setting `ZERO_LOG_LEVEL=debug` in your shell overrides the `--log-level` default, but you can't override the database connection strings (orez needs to point zero-cache at its own proxy).
 
 Common vars you might want to set:
 

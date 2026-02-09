@@ -85,6 +85,11 @@ const main = defineCommand({
       description: 'run pglite + proxy only, skip zero-cache',
       default: false,
     },
+    'log-level': {
+      type: 'string',
+      description: 'log level: error, warn, info, debug',
+      default: 'info',
+    },
   },
   subCommands: {
     s3: s3Command,
@@ -99,6 +104,7 @@ const main = defineCommand({
       pgUser: args['pg-user'],
       pgPassword: args['pg-password'],
       skipZeroCache: args['skip-zero-cache'],
+      logLevel: args['log-level'] as 'error' | 'warn' | 'info' | 'debug',
     })
 
     log.orez('ready')
