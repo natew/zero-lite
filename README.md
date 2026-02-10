@@ -156,6 +156,7 @@ The proxy intercepts several things to convince zero-cache it's talking to a rea
 - `IDENTIFY_SYSTEM` returns a fake system ID and timeline
 - `CREATE_REPLICATION_SLOT` persists slot info in a local table and returns a valid LSN
 - `START_REPLICATION` enters streaming mode, encoding changes as pgoutput binary messages
+- `version()` returns a standard PostgreSQL 16.4 version string (PGlite's Emscripten string breaks `pg_restore` and other tools)
 - `current_setting('wal_level')` always returns `logical`
 - `pg_replication_slots` queries are redirected to a local tracking table
 - `SET TRANSACTION SNAPSHOT` is silently accepted (PGlite doesn't support imported snapshots)
@@ -185,7 +186,7 @@ This is a development tool. It is not suitable for production use.
 
 - PGlite is single-session per instance. All queries to the same database are serialized through a mutex. Cross-database queries are independent (each database has its own PGlite instance and mutex). Fine for development but would bottleneck under real load.
 - Triggers add overhead to every write. Again, fine for development.
-- PGlite stores data on the local filesystem. No replication, no backups, no high availability.
+- PGlite stores data on the local filesystem. No replication, no high availability. Use `orez pg_dump` / `orez pg_restore` for backups.
 
 ## Project structure
 
@@ -215,6 +216,31 @@ sqlite-wasm/
   test/
     database.test.ts    37 tests for the wasm sqlite engine
 ```
+
+## Backup & Restore
+
+Dump and restore your local PGlite database using WASM-compiled `pg_dump` — no native Postgres install needed.
+
+```
+bunx orez pg_dump > backup.sql
+bunx orez pg_dump --output backup.sql
+bunx orez pg_restore backup.sql
+bunx orez pg_restore backup.sql --clean
+```
+
+```
+pg_dump options:
+  --data-dir=.orez    data directory
+  -o, --output        output file path (default: stdout)
+
+pg_restore options:
+  --data-dir=.orez    data directory
+  --clean             drop and recreate public schema before restoring
+```
+
+orez must not be running when using these commands — PGlite data directories are single-process. The commands will detect a locked database and tell you to stop orez first.
+
+Standard Postgres tools (`pg_dump`, `pg_restore`, `psql`) also work against the running proxy since orez presents a standard PostgreSQL 16.4 version string over the wire.
 
 ## Extra: orez/s3
 

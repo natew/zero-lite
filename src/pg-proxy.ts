@@ -24,8 +24,17 @@ import type { ZeroLiteConfig } from './config.js'
 import type { PGliteInstances } from './pglite-manager.js'
 import type { PGlite } from '@electric-sql/pglite'
 
+// clean version string: strip emscripten compiler info that breaks pg_restore/pg_dump
+const PG_VERSION_STRING =
+  "'PostgreSQL 16.4 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 12.2.0, 64-bit'"
+
 // query rewrites: make pglite look like real postgres with logical replication
 const QUERY_REWRITES: Array<{ match: RegExp; replace: string }> = [
+  // version() — return a standard-looking version string instead of the emscripten one
+  {
+    match: /\bversion\(\)/gi,
+    replace: PG_VERSION_STRING,
+  },
   // wal_level check
   {
     match: /current_setting\s*\(\s*'wal_level'\s*\)/gi,
