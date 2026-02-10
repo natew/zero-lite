@@ -64,6 +64,37 @@ const QUERY_REWRITES: Array<{ match: RegExp; replace: string }> = [
   },
 ]
 
+// parameter status messages sent during connection handshake
+// pg_restore and other tools read these to determine server capabilities
+const SERVER_PARAMS: [string, string][] = [
+  ['server_encoding', 'UTF8'],
+  ['client_encoding', 'UTF8'],
+  ['DateStyle', 'ISO, MDY'],
+  ['integer_datetimes', 'on'],
+  ['standard_conforming_strings', 'on'],
+  ['TimeZone', 'UTC'],
+  ['IntervalStyle', 'postgres'],
+]
+
+// build a ParameterStatus wire protocol message (type 'S', 0x53)
+function buildParameterStatus(name: string, value: string): Uint8Array {
+  const encoder = new TextEncoder()
+  const nameBytes = encoder.encode(name)
+  const valueBytes = encoder.encode(value)
+  const len = 4 + nameBytes.length + 1 + valueBytes.length + 1
+  const buf = new Uint8Array(1 + len)
+  buf[0] = 0x53 // 'S'
+  new DataView(buf.buffer).setInt32(1, len)
+  let pos = 5
+  buf.set(nameBytes, pos)
+  pos += nameBytes.length
+  buf[pos++] = 0
+  buf.set(valueBytes, pos)
+  pos += valueBytes.length
+  buf[pos] = 0
+  return buf
+}
+
 // queries to intercept and return no-op success (synthetic SET response)
 // pglite rejects SET TRANSACTION if any query (e.g. SET search_path) ran first
 const NOOP_QUERY_PATTERNS: RegExp[] = [/^\s*SET\s+TRANSACTION\b/i, /^\s*SET\s+SESSION\b/i]
@@ -301,6 +332,7 @@ export async function startPgProxy(
 
     try {
       const connection = await fromNodeSocket(socket, {
+        serverVersion: '16.4',
         auth: {
           method: 'password',
           getClearTextPassword() {
@@ -316,6 +348,15 @@ export async function startPgProxy(
               credentials.username === config.pgUser
             )
           },
+        },
+
+        // send ParameterStatus messages that standard postgres tools expect
+        // pg-gateway sends server_version via the serverVersion option above,
+        // but tools like pg_restore also need encoding, datestyle, etc.
+        onAuthenticated() {
+          for (const [name, value] of SERVER_PARAMS) {
+            socket.write(buildParameterStatus(name, value))
+          }
         },
 
         async onStartup(state) {
