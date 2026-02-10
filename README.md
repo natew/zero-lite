@@ -1,22 +1,19 @@
 # orez
 
-[Zero](https://zero.rocicorp.dev) development backend powered by [PGlite](https://pglite.dev) and [bedrock-sqlite](https://www.npmjs.com/package/bedrock-sqlite) (our WASM fork of SQLite's [bedrock branch](https://sqlite.org/src/timeline?t=begin-concurrent)). Bundles PostgreSQL and zero-cache into a single package with no native dependencies — both Postgres and SQLite run as WASM, so you can `bunx orez` and have a full backend up in seconds. No Docker, no Postgres install, no `node-gyp`, no platform-specific binaries.
+It's [Zero](https://zero.rocicorp.dev) and [Postgres](https://pglite.dev) with no native dependencies in one package. Helped by a custom WASM fork of SQLite's [bedrock branch](https://sqlite.org/src/timeline?t=begin-concurrent) called [bedrock-sqlite](https://www.npmjs.com/package/bedrock-sqlite). No Docker, no Postgres install, no `node-gyp`, no platform-specific binaries.
 
 ```
 bunx orez
 ```
 
-Starts PGlite (Postgres via WASM), the TCP proxy, and zero-cache (SQLite via WASM). Ports auto-increment if already in use.
+Starts PGlite (WASM Postgres), a TCP proxy, and zero-cache with WASM SQLite. Exports a CLI, programmatic API, and Vite plugin. Comes with PGlite extensions `pgvector` and `pg_trgm` enabled by default.
 
-Exports a CLI, programmatic API, and Vite plugin.
 
 ## Install
 
 ```
 bun install orez
 ```
-
-PGlite extensions `pgvector` and `pg_trgm` are enabled by default on the postgres instance.
 
 ## CLI
 
@@ -40,6 +37,8 @@ bunx orez
 --on-db-ready=CMD         command to run after db+proxy are ready, before zero-cache starts
 --on-healthy=CMD          command to run once all services are healthy
 ```
+
+Ports auto-increment if already in use.
 
 ## Programmatic
 
@@ -216,7 +215,9 @@ sqlite-wasm/
 
 ## Extra: orez/s3
 
-Local s3-compatible server for dev. Avoids needing Docker or MinIO.
+Since we use this stack often with a file uploading service like MinIO which also requires docker, I threw in a tiny s3-compatible endpoint too:
+
+`bunx orez --s3` or standalone `bunx orez s3`.
 
 ```typescript
 import { startS3Local } from 'orez/s3'
@@ -226,8 +227,6 @@ const server = await startS3Local({
   dataDir: '.orez',
 })
 ```
-
-Or via CLI: `bunx orez --s3` or standalone `bunx orez s3`.
 
 Handles GET, PUT, DELETE, HEAD with CORS. Files stored on disk. No multipart, no ACLs, no versioning.
 
