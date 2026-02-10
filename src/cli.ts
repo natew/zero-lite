@@ -131,7 +131,18 @@ function shouldSkipStatement(stmt: string): boolean {
   return false
 }
 
-// stream a sql dump file statement-by-statement, skipping unsupported ones
+// how many data statements to batch into a single transaction
+const BATCH_SIZE = 500
+// run CHECKPOINT every N batches to flush WAL and reclaim wasm memory
+const CHECKPOINT_INTERVAL = 10
+
+// true for statements that are data manipulation (INSERT/UPDATE/DELETE/COPY)
+// these get batched into transactions. DDL runs outside batches.
+function isDataStatement(stmt: string): boolean {
+  return /^\s*(INSERT|UPDATE|DELETE|COPY)\b/i.test(stmt)
+}
+
+// stream a sql dump file statement-by-statement with transaction batching
 async function execDumpFile(
   db: { exec: (sql: string) => Promise<unknown> },
   filePath: string
@@ -147,12 +158,42 @@ async function execDumpFile(
   let buf = ''
   let executed = 0
   let skipped = 0
+  let batchCount = 0
+  let batchesSinceCheckpoint = 0
+  let inBatch = false
+  let dollarTag: string | null = null // tracks $tag$ quoting
+
+  async function flushBatch() {
+    if (inBatch) {
+      await db.exec('COMMIT')
+      inBatch = false
+      batchesSinceCheckpoint++
+      if (batchesSinceCheckpoint >= CHECKPOINT_INTERVAL) {
+        await db.exec('CHECKPOINT')
+        batchesSinceCheckpoint = 0
+      }
+    }
+    batchCount = 0
+  }
 
   for await (const line of rl) {
-    // skip empty lines and sql comments
-    if (line === '' || line.startsWith('--')) continue
+    // skip empty lines and sql comments (only outside dollar-quoted blocks)
+    if (!dollarTag && (line === '' || line.startsWith('--'))) continue
 
     buf += (buf ? '\n' : '') + line
+
+    // track dollar-quoting: $$ or $tag$
+    const dollarMatches = line.matchAll(/(\$[a-zA-Z_]*\$)/g)
+    for (const m of dollarMatches) {
+      if (dollarTag === null) {
+        dollarTag = m[1]
+      } else if (m[1] === dollarTag) {
+        dollarTag = null
+      }
+    }
+
+    // can't end a statement while inside a dollar-quoted block
+    if (dollarTag) continue
 
     // statements end with ; at end of line (pg_dump always formats this way)
     if (!line.trimEnd().endsWith(';')) continue
@@ -165,11 +206,34 @@ async function execDumpFile(
       continue
     }
 
-    await db.exec(stmt)
-    executed++
+    // rewrite CREATE SCHEMA → CREATE SCHEMA IF NOT EXISTS
+    const rewritten = stmt.replace(
+      /^(\s*CREATE\s+SCHEMA\s+)(?!IF\s+NOT\s+EXISTS\b)/im,
+      '$1IF NOT EXISTS '
+    )
+
+    if (isDataStatement(rewritten)) {
+      // batch data statements into transactions
+      if (!inBatch) {
+        await db.exec('BEGIN')
+        inBatch = true
+      }
+      await db.exec(rewritten)
+      executed++
+      batchCount++
+      if (batchCount >= BATCH_SIZE) {
+        await flushBatch()
+      }
+    } else {
+      // DDL runs outside batches
+      await flushBatch()
+      await db.exec(rewritten)
+      executed++
+    }
   }
 
-  // flush any remaining buffer
+  // flush remaining batch + buffer
+  await flushBatch()
   if (buf.trim()) {
     if (!shouldSkipStatement(buf)) {
       await db.exec(buf)
@@ -222,6 +286,7 @@ const pgRestoreCommand = defineCommand({
       db = new PGlite({
         dataDir: dataPath,
         extensions: { vector, pg_trgm },
+        relaxedDurability: true,
       })
       await db.waitReady
 
