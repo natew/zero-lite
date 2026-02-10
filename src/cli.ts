@@ -4,6 +4,7 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { defineCommand, runMain } from 'citty'
+import { deparseSync, loadModule, parseSync } from 'pgsql-parser'
 
 import { startZeroLite } from './index.js'
 import { log } from './log.js'
@@ -119,15 +120,40 @@ const UNSUPPORTED_EXTENSIONS = new Set([
 // check if a statement should be skipped during restore
 function shouldSkipStatement(stmt: string): boolean {
   const trimmed = stmt.trimStart()
-  // skip psql meta-commands like \restrict
+  // skip psql meta-commands like \restrict (can't be parsed)
   if (trimmed.startsWith('\\')) return true
-  // skip SET transaction_timeout (pg 18+ artifact)
-  if (/^SET\s+transaction_timeout\b/i.test(trimmed)) return true
-  // skip CREATE/DROP/COMMENT ON unsupported extensions
-  const extMatch = trimmed.match(
-    /^(?:CREATE\s+EXTENSION|DROP\s+EXTENSION|COMMENT\s+ON\s+EXTENSION)\b.*?\b(\w+)/i
-  )
-  if (extMatch && UNSUPPORTED_EXTENSIONS.has(extMatch[1])) return true
+
+  let parsed
+  try {
+    parsed = parseSync(trimmed)
+  } catch {
+    return false // if parser can't handle it, let pglite try
+  }
+
+  for (const entry of parsed.stmts) {
+    const nodeType = Object.keys(entry.stmt)[0]
+    const node = entry.stmt[nodeType]
+
+    // skip SET transaction_timeout (pg 18+ artifact)
+    if (nodeType === 'VariableSetStmt' && node.name === 'transaction_timeout') return true
+
+    // skip CREATE EXTENSION for unsupported extensions
+    if (nodeType === 'CreateExtensionStmt' && UNSUPPORTED_EXTENSIONS.has(node.extname))
+      return true
+
+    // skip DROP EXTENSION for unsupported extensions
+    if (nodeType === 'DropStmt' && node.removeType === 'OBJECT_EXTENSION') {
+      const extName = node.objects?.[0]?.String?.sval
+      if (extName && UNSUPPORTED_EXTENSIONS.has(extName)) return true
+    }
+
+    // skip COMMENT ON EXTENSION for unsupported extensions
+    if (nodeType === 'CommentStmt' && node.objtype === 'OBJECT_EXTENSION') {
+      const extName = node.object?.String?.sval
+      if (extName && UNSUPPORTED_EXTENSIONS.has(extName)) return true
+    }
+  }
+
   return false
 }
 
@@ -139,7 +165,19 @@ const CHECKPOINT_INTERVAL = 10
 // true for statements that are data manipulation (INSERT/UPDATE/DELETE/COPY)
 // these get batched into transactions. DDL runs outside batches.
 function isDataStatement(stmt: string): boolean {
-  return /^\s*(INSERT|UPDATE|DELETE|COPY)\b/i.test(stmt)
+  try {
+    const parsed = parseSync(stmt)
+    if (parsed.stmts.length === 0) return false
+    const nodeType = Object.keys(parsed.stmts[0].stmt)[0]
+    return (
+      nodeType === 'InsertStmt' ||
+      nodeType === 'UpdateStmt' ||
+      nodeType === 'DeleteStmt' ||
+      nodeType === 'CopyStmt'
+    )
+  } catch {
+    return false
+  }
 }
 
 // stream a sql dump file statement-by-statement with transaction batching
@@ -207,10 +245,22 @@ async function execDumpFile(
     }
 
     // rewrite CREATE SCHEMA → CREATE SCHEMA IF NOT EXISTS
-    const rewritten = stmt.replace(
-      /^(\s*CREATE\s+SCHEMA\s+)(?!IF\s+NOT\s+EXISTS\b)/im,
-      '$1IF NOT EXISTS '
-    )
+    let rewritten = stmt
+    try {
+      const parsed = parseSync(stmt)
+      if (parsed.stmts.length > 0) {
+        const nodeType = Object.keys(parsed.stmts[0].stmt)[0]
+        if (
+          nodeType === 'CreateSchemaStmt' &&
+          !parsed.stmts[0].stmt.CreateSchemaStmt.if_not_exists
+        ) {
+          parsed.stmts[0].stmt.CreateSchemaStmt.if_not_exists = true
+          rewritten = deparseSync(parsed)
+        }
+      }
+    } catch {
+      // if parse/deparse fails, use original
+    }
 
     if (isDataStatement(rewritten)) {
       // batch data statements into transactions
@@ -272,6 +322,8 @@ const pgRestoreCommand = defineCommand({
     const { PGlite } = await import('@electric-sql/pglite')
     const { vector } = await import('@electric-sql/pglite/vector')
     const { pg_trgm } = await import('@electric-sql/pglite/contrib/pg_trgm')
+
+    await loadModule() // initialize pgsql-parser WASM
 
     const sqlFile = args.file
     if (!existsSync(sqlFile)) {
