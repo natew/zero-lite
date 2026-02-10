@@ -536,12 +536,12 @@ describe('zero-cache pgoutput compatibility', { timeout: 30000 }, () => {
 
     // typeOids match actual postgres column types
     const expectedOids: Record<string, number> = {
-      id: 25,        // text
-      int_val: 23,   // integer
-      big_val: 20,   // bigint
-      flt_val: 701,  // double precision (float8)
-      bool_val: 16,  // boolean
-      text_val: 25,  // text
+      id: 25, // text
+      int_val: 23, // integer
+      big_val: 20, // bigint
+      flt_val: 701, // double precision (float8)
+      bool_val: 16, // boolean
+      text_val: 25, // text
     }
     for (const col of rel.columns) {
       expect(col.typeOid, `typeOid for ${col.name}`).toBe(expectedOids[col.name])

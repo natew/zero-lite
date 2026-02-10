@@ -400,7 +400,7 @@ export async function handleStartReplication(
       json: 114,
       real: 700,
       'double precision': 701,
-      'character': 1042,
+      character: 1042,
       'character varying': 1043,
       date: 1082,
       'time without time zone': 1083,
