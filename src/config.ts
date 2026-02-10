@@ -27,7 +27,7 @@ export function getConfig(overrides: Partial<ZeroLiteConfig> = {}): ZeroLiteConf
     migrationsDir: overrides.migrationsDir || '',
     seedFile: overrides.seedFile || 'src/database/seed.sql',
     skipZeroCache: overrides.skipZeroCache || false,
-    disableWasmSqlite: overrides.disableWasmSqlite ?? true,
+    disableWasmSqlite: overrides.disableWasmSqlite ?? false,
     logLevel: overrides.logLevel || 'warn',
     pgliteOptions: overrides.pgliteOptions || {},
     onDbReady: overrides.onDbReady || '',
