@@ -272,6 +272,15 @@ function patchSqliteForWasm(): void {
       if (current.includes('OrigDatabase')) return // already patched
     }
 
+    // back up originals before patching
+    if (existsSync(indexPath)) {
+      writeFileSync(indexPath + '.original', readFileSync(indexPath))
+    }
+    const dbBackupPath = resolve(libDir, 'database.js')
+    if (existsSync(dbBackupPath)) {
+      writeFileSync(dbBackupPath + '.original', readFileSync(dbBackupPath))
+    }
+
     // resolve bedrock-sqlite's dist entry point
     const bedrockEntry = resolvePackage('bedrock-sqlite')
     if (!existsSync(bedrockEntry)) {
@@ -287,9 +296,6 @@ var OrigDatabase = mod.Database;
 var SqliteError = mod.SqliteError;
 
 // wrap constructor to set busy_timeout on every connection immediately.
-// VFS nodejsLock retries with Atomics.wait, and nodejsSleep enables
-// SQLite's busy handler - so busy_timeout works properly in WASM now.
-// WAL mode is left to zero-cache to manage (needed for BEGIN CONCURRENT).
 function Database() {
   var db = new OrigDatabase(...arguments);
   try {
@@ -358,6 +364,31 @@ module.exports.SqliteError = SqliteError;
   }
 }
 
+function unpatchSqliteWasm(): void {
+  // restore native @rocicorp/zero-sqlite3 if it was previously patched
+  try {
+    const sqliteEntry = resolvePackage('@rocicorp/zero-sqlite3')
+    if (!sqliteEntry) return
+    const libDir = resolve(sqliteEntry, '..')
+    const indexPath = resolve(libDir, 'index.js')
+    if (!existsSync(indexPath)) return
+    const current = readFileSync(indexPath, 'utf-8')
+    if (!current.includes('OrigDatabase')) return // not patched
+
+    // restore from backups if available
+    for (const file of ['index.js', 'database.js']) {
+      const filePath = resolve(libDir, file)
+      const backupPath = filePath + '.original'
+      if (existsSync(backupPath)) {
+        writeFileSync(filePath, readFileSync(backupPath))
+      }
+    }
+    log.orez('restored native @rocicorp/zero-sqlite3 (removed wasm patch)')
+  } catch (e) {
+    log.orez(`failed to restore native sqlite: ${e}`)
+  }
+}
+
 async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
   // resolve @rocicorp/zero entry for finding zero-cache modules
   const zeroEntry = resolvePackage('@rocicorp/zero')
@@ -370,6 +401,7 @@ async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
   if (!config.disableWasmSqlite) {
     patchSqliteForWasm()
   } else {
+    unpatchSqliteWasm()
     log.debug.orez('wasm sqlite disabled, using native @rocicorp/zero-sqlite3')
   }
 

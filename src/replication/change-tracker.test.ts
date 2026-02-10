@@ -33,7 +33,7 @@ describe('change-tracker', () => {
     const changes = await getChangesSince(db, 0)
     expect(changes).toHaveLength(1)
     expect(changes[0].op).toBe('INSERT')
-    expect(changes[0].table_name).toBe('items')
+    expect(changes[0].table_name).toBe('public.items')
     expect(changes[0].row_data).toMatchObject({ name: 'a', value: 1 })
     expect(changes[0].old_data).toBeNull()
   })
@@ -116,8 +116,8 @@ describe('change-tracker', () => {
 
     const changes = await getChangesSince(db, 0)
     const tables = new Set(changes.map((c) => c.table_name))
-    expect(tables).toContain('items')
-    expect(tables).toContain('other')
+    expect(tables).toContain('public.items')
+    expect(tables).toContain('public.other')
   })
 
   it('handles rapid inserts (50 rows)', async () => {
@@ -178,7 +178,7 @@ describe('change-tracker', () => {
     await db.exec(`INSERT INTO public."my""table" (val) VALUES ('works')`)
 
     const changes = await getChangesSince(db, 0)
-    const special = changes.filter((c) => c.table_name === 'my"table')
+    const special = changes.filter((c) => c.table_name === 'public.my"table')
     expect(special).toHaveLength(1)
     expect(special[0].op).toBe('INSERT')
     expect(special[0].row_data).toMatchObject({ val: 'works' })

@@ -534,9 +534,13 @@ describe('zero-cache pgoutput compatibility', { timeout: 30000 }, () => {
     expect(names).toContain('int_val')
     expect(names).toContain('text_val')
 
-    // all typeOids are 25 (text) - known difference from real postgres
+    // typeOids: boolean columns use 16, everything else is 25 (text)
     for (const col of rel.columns) {
-      expect(col.typeOid).toBe(25)
+      if (col.name === 'bool_val') {
+        expect(col.typeOid).toBe(16)
+      } else {
+        expect(col.typeOid).toBe(25)
+      }
     }
 
     s.close()
@@ -560,7 +564,7 @@ describe('zero-cache pgoutput compatibility', { timeout: 30000 }, () => {
     expect(ins.new.int_val).toBe('123')
     expect(ins.new.big_val).toBe('9876543210')
     expect(ins.new.flt_val).toBe('3.14')
-    expect(ins.new.bool_val).toBe('true')
+    expect(ins.new.bool_val).toBe('t')
     expect(ins.new.text_val).toBe('hello')
 
     s.close()

@@ -9,13 +9,18 @@
 
 import { describe, expect, test, beforeAll, afterAll, beforeEach } from 'vitest'
 import WebSocket from 'ws'
+
 import { startZeroLite } from '../index.js'
+
 import type { PGlite } from '@electric-sql/pglite'
 
 // simple async queue for collecting websocket messages
 class Queue<T> {
   private items: T[] = []
-  private waiters: Array<{ resolve: (v: T) => void; timer?: ReturnType<typeof setTimeout> }> = []
+  private waiters: Array<{
+    resolve: (v: T) => void
+    timer?: ReturnType<typeof setTimeout>
+  }> = []
 
   enqueue(item: T) {
     const waiter = this.waiters.shift()
@@ -113,7 +118,7 @@ describe('orez integration', { timeout: 120000 }, () => {
   test('zero-cache starts and accepts websocket connections', async () => {
     const ws = new WebSocket(
       `ws://localhost:${zeroPort}/sync/v4/connect` +
-        `?clientGroupID=test-cg&clientID=test-client&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
+        `?clientGroupID=test-cg&clientID=test-client&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`
     )
 
     const connected = new Promise<void>((resolve, reject) => {
@@ -161,7 +166,7 @@ describe('orez integration', { timeout: 120000 }, () => {
             value: 'hello',
           }),
         }),
-      ]),
+      ])
     )
 
     ws.close()
@@ -196,7 +201,7 @@ describe('orez integration', { timeout: 120000 }, () => {
             value: 'live-value',
           }),
         }),
-      ]),
+      ])
     )
 
     ws.close()
@@ -236,7 +241,7 @@ describe('orez integration', { timeout: 120000 }, () => {
             value: 'updated',
           }),
         }),
-      ]),
+      ])
     )
 
     ws.close()
@@ -267,7 +272,7 @@ describe('orez integration', { timeout: 120000 }, () => {
           op: 'del',
           tableName: 'foo',
         }),
-      ]),
+      ])
     )
 
     ws.close()
@@ -289,8 +294,8 @@ describe('orez integration', { timeout: 120000 }, () => {
           `concurrent-${i}`,
           `value-${i}`,
           i,
-        ]),
-      ),
+        ])
+      )
     )
 
     // collect all poke parts within a window
@@ -316,11 +321,11 @@ describe('orez integration', { timeout: 120000 }, () => {
   function connectAndSubscribe(
     port: number,
     downstream: Queue<unknown>,
-    query: Record<string, unknown>,
+    query: Record<string, unknown>
   ): WebSocket {
     const ws = new WebSocket(
       `ws://localhost:${port}/sync/v4/connect` +
-        `?clientGroupID=test-cg-${Date.now()}&clientID=test-client&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
+        `?clientGroupID=test-cg-${Date.now()}&clientID=test-client&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`
     )
 
     ws.on('message', (data) => {
@@ -334,7 +339,7 @@ describe('orez integration', { timeout: 120000 }, () => {
           {
             desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
           },
-        ]),
+        ])
       )
     })
 
@@ -363,7 +368,7 @@ describe('orez integration', { timeout: 120000 }, () => {
 
   async function waitForPokePart(
     downstream: Queue<unknown>,
-    timeoutMs = 10000,
+    timeoutMs = 10000
   ): Promise<Record<string, any>> {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
@@ -379,7 +384,7 @@ describe('orez integration', { timeout: 120000 }, () => {
 
   async function collectPokeRows(
     downstream: Queue<unknown>,
-    windowMs = 5000,
+    windowMs = 5000
   ): Promise<any[]> {
     const rows: any[] = []
     const deadline = Date.now() + windowMs
@@ -392,7 +397,12 @@ describe('orez integration', { timeout: 120000 }, () => {
         rows.push(...msg[1].rowsPatch)
         // check if more poke parts come quickly
         const more = (await downstream.dequeue('timeout' as any, 2000)) as any
-        if (more !== 'timeout' && Array.isArray(more) && more[0] === 'pokePart' && more[1]?.rowsPatch) {
+        if (
+          more !== 'timeout' &&
+          Array.isArray(more) &&
+          more[0] === 'pokePart' &&
+          more[1]?.rowsPatch
+        ) {
           rows.push(...more[1].rowsPatch)
         }
         break

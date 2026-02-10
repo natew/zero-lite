@@ -32,26 +32,33 @@ const QUERY_REWRITES: Array<{ match: RegExp; replace: string }> = [
     match: /current_setting\s*\(\s*'wal_level'\s*\)/gi,
     replace: "'logical'::text",
   },
-  // strip READ ONLY from BEGIN
+  // strip READ ONLY from BEGIN (pglite is single-session, no read-only transactions)
   {
     match: /\bREAD\s+ONLY\b/gi,
     replace: '',
+  },
+  // strip ISOLATION LEVEL from any query (pglite is single-session, isolation is meaningless)
+  // catches: SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, BEGIN ISOLATION LEVEL SERIALIZABLE, etc.
+  {
+    match:
+      /\bISOLATION\s+LEVEL\s+(SERIALIZABLE|REPEATABLE\s+READ|READ\s+COMMITTED|READ\s+UNCOMMITTED)\b/gi,
+    replace: '',
+  },
+  // strip bare SET TRANSACTION (after ISOLATION LEVEL is removed, this becomes a no-op statement)
+  {
+    match: /\bSET\s+TRANSACTION\s*;/gi,
+    replace: ';',
   },
   // redirect pg_replication_slots to our fake table
   {
     match: /\bpg_replication_slots\b/g,
     replace: 'public._zero_replication_slots',
   },
-  // SET TRANSACTION queries: rewrite to SELECT 1 (PGlite doesn't support them,
-  // and no-op interception doesn't work for extended protocol Bind/Execute)
-  {
-    match: /^\s*SET\s+TRANSACTION\b.*$/gis,
-    replace: 'SELECT 1',
-  },
 ]
 
-// queries to intercept and return no-op success
-const NOOP_QUERY_PATTERNS: RegExp[] = []
+// queries to intercept and return no-op success (synthetic SET response)
+// pglite rejects SET TRANSACTION if any query (e.g. SET search_path) ran first
+const NOOP_QUERY_PATTERNS: RegExp[] = [/^\s*SET\s+TRANSACTION\b/i, /^\s*SET\s+SESSION\b/i]
 
 /**
  * extract query text from a Parse message (0x50).
@@ -239,32 +246,9 @@ function stripReadyForQuery(data: Uint8Array): Uint8Array {
   return result
 }
 
-// simple mutex for serializing pglite access
-class Mutex {
-  private locked = false
-  private queue: Array<() => void> = []
+import { pgMutex } from './mutex.js'
 
-  async acquire(): Promise<void> {
-    if (!this.locked) {
-      this.locked = true
-      return
-    }
-    return new Promise<void>((resolve) => {
-      this.queue.push(resolve)
-    })
-  }
-
-  release(): void {
-    const next = this.queue.shift()
-    if (next) {
-      next()
-    } else {
-      this.locked = false
-    }
-  }
-}
-
-const mutex = new Mutex()
+const mutex = pgMutex
 
 // module-level search_path tracking
 let currentSearchPath = 'public'
@@ -433,6 +417,9 @@ async function handleReplicationMessage(
   // handle other replication queries
   const response = await handleReplicationQuery(query, db)
   if (response) return response
+
+  // apply query rewrites (e.g. SET TRANSACTION → SELECT 1) before forwarding
+  data = interceptQuery(data)
 
   // fall through to pglite for unrecognized queries
   await mutex.acquire()

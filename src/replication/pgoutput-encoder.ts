@@ -147,7 +147,15 @@ function encodeTupleData(
       values.push(null)
       totalSize += 1 // 'n' byte
     } else {
-      const strVal = typeof val === 'object' ? JSON.stringify(val) : String(val)
+      // convert to postgresql text format
+      let strVal: string
+      if (typeof val === 'boolean') {
+        strVal = val ? 't' : 'f'
+      } else if (typeof val === 'object') {
+        strVal = JSON.stringify(val)
+      } else {
+        strVal = String(val)
+      }
       const bytes = encodeString(strVal)
       values.push(bytes)
       totalSize += 1 + 4 + bytes.length // 't' + len + data

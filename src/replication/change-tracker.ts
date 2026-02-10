@@ -45,18 +45,21 @@ export async function installChangeTracking(db: PGlite): Promise<void> {
   // create trigger function
   await db.exec(`
     CREATE OR REPLACE FUNCTION public._zero_track_change() RETURNS TRIGGER AS $$
+    DECLARE
+      qualified_name TEXT;
     BEGIN
+      qualified_name := TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME;
       IF TG_OP = 'DELETE' THEN
         INSERT INTO public._zero_changes (table_name, op, old_data)
-        VALUES (TG_TABLE_NAME, 'DELETE', row_to_json(OLD)::jsonb);
+        VALUES (qualified_name, 'DELETE', row_to_json(OLD)::jsonb);
         RETURN OLD;
       ELSIF TG_OP = 'UPDATE' THEN
         INSERT INTO public._zero_changes (table_name, op, row_data, old_data)
-        VALUES (TG_TABLE_NAME, 'UPDATE', row_to_json(NEW)::jsonb, row_to_json(OLD)::jsonb);
+        VALUES (qualified_name, 'UPDATE', row_to_json(NEW)::jsonb, row_to_json(OLD)::jsonb);
         RETURN NEW;
       ELSIF TG_OP = 'INSERT' THEN
         INSERT INTO public._zero_changes (table_name, op, row_data)
-        VALUES (TG_TABLE_NAME, 'INSERT', row_to_json(NEW)::jsonb);
+        VALUES (qualified_name, 'INSERT', row_to_json(NEW)::jsonb);
         RETURN NEW;
       END IF;
       RETURN NULL;
@@ -135,6 +138,49 @@ async function installTriggersOnAllTables(db: PGlite): Promise<void> {
   }
 
   log.debug.pglite(`installed change tracking triggers on ${count} tables`)
+}
+
+/**
+ * install change tracking triggers on tables in shard schemas.
+ * zero-cache creates shard schemas (e.g. chat_0) with clients/mutations
+ * tables that track mutation confirmations. these must be replicated
+ * for .server promises to resolve.
+ */
+export async function installTriggersOnShardTables(db: PGlite): Promise<void> {
+  const result = await db.query<{ nspname: string }>(
+    `SELECT nspname FROM pg_namespace
+     WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'public')
+       AND nspname NOT LIKE 'pg_%'
+       AND nspname NOT LIKE 'zero_%'
+       AND nspname NOT LIKE '_zero_%'
+       AND nspname NOT LIKE '%/%'`
+  )
+
+  if (result.rows.length === 0) return
+
+  let count = 0
+  for (const { nspname } of result.rows) {
+    const tables = await db.query<{ tablename: string }>(
+      `SELECT tablename FROM pg_tables WHERE schemaname = $1`,
+      [nspname]
+    )
+
+    for (const { tablename } of tables.rows) {
+      const quotedSchema = quoteIdent(nspname)
+      const quotedTable = quoteIdent(tablename)
+      await db.exec(`
+        DROP TRIGGER IF EXISTS _zero_change_trigger ON ${quotedSchema}.${quotedTable};
+        CREATE TRIGGER _zero_change_trigger
+          AFTER INSERT OR UPDATE OR DELETE ON ${quotedSchema}.${quotedTable}
+          FOR EACH ROW EXECUTE FUNCTION public._zero_track_change();
+      `)
+      count++
+    }
+  }
+
+  if (count > 0) {
+    log.debug.pglite(`installed change tracking on ${count} shard tables`)
+  }
 }
 
 export async function getChangesSince(

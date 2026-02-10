@@ -7,9 +7,11 @@
  */
 
 import { log } from '../log.js'
+import { pgMutex } from '../mutex.js'
 import {
   getChangesSince,
   getCurrentWatermark,
+  installTriggersOnShardTables,
   type ChangeRecord,
 } from './change-tracker.js'
 import {
@@ -198,7 +200,9 @@ export async function handleReplicationQuery(
   }
 
   if (upper.startsWith('CREATE_REPLICATION_SLOT')) {
-    const match = trimmed.match(/CREATE_REPLICATION_SLOT\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i)
+    const match = trimmed.match(
+      /CREATE_REPLICATION_SLOT\s+(?:"([^"]+)"|'([^']+)'|(\S+))/i
+    )
     const slotName = match?.[1] || match?.[2] || match?.[3] || 'zero_slot'
     const lsn = lsnToString(nextLsn())
     const snapshotName = `00000003-00000001-1`
@@ -238,6 +242,12 @@ export async function handleReplicationQuery(
     return buildCommandComplete('ALTER ROLE')
   }
 
+  // SET TRANSACTION - pglite rejects this if any query ran first (e.g. SET search_path).
+  // return synthetic response since pglite is single-connection and doesn't need isolation levels.
+  if (upper.startsWith('SET TRANSACTION') || upper.startsWith('SET SESSION')) {
+    return buildCommandComplete('SET')
+  }
+
   return null
 }
 
@@ -262,8 +272,23 @@ export async function handleStartReplication(
 
   let lastWatermark = 0
 
-  // set up LISTEN for real-time change notifications
-  await db.exec(`
+  // declared outside mutex block so they're accessible in the poll loop
+  const tableKeyColumns = new Map<string, Set<string>>()
+  const excludedColumns = new Map<string, Set<string>>()
+  const booleanColumns = new Map<string, Set<string>>()
+
+  // acquire mutex for all setup queries to avoid conflicting with proxy connections.
+  // the change-streamer's initial copy also queries PGlite via the proxy, and
+  // direct db.query()/db.exec() calls here bypass the proxy's mutex, causing
+  // "already in transaction" errors when they interleave.
+  await pgMutex.acquire()
+  try {
+    // install change tracking triggers on shard schema tables (e.g. chat_0.clients)
+    // these track zero-cache's lastMutationID for .server promise resolution
+    await installTriggersOnShardTables(db)
+
+    // set up LISTEN for real-time change notifications
+    await db.exec(`
     CREATE OR REPLACE FUNCTION public._zero_notify_change() RETURNS TRIGGER AS $$
     BEGIN
       PERFORM pg_notify('_zero_changes', TG_TABLE_NAME);
@@ -272,77 +297,135 @@ export async function handleStartReplication(
     $$ LANGUAGE plpgsql;
   `)
 
-  // install notify trigger on tracked tables (use configured publication if available)
-  const pubName = process.env.ZERO_APP_PUBLICATIONS
-  let tables: { tablename: string }[]
-  if (pubName) {
-    const result = await db.query<{ tablename: string }>(
-      `SELECT tablename FROM pg_publication_tables
+    // install notify trigger on tracked tables (use configured publication if available)
+    const pubName = process.env.ZERO_APP_PUBLICATIONS
+    let tables: { tablename: string }[]
+    if (pubName) {
+      const result = await db.query<{ tablename: string }>(
+        `SELECT tablename FROM pg_publication_tables
        WHERE pubname = $1 AND schemaname = 'public' AND tablename NOT LIKE '_zero_%'`,
-      [pubName]
-    )
-    tables = result.rows
-  } else {
-    const result = await db.query<{ tablename: string }>(
-      `SELECT tablename FROM pg_tables
+        [pubName]
+      )
+      tables = result.rows
+    } else {
+      const result = await db.query<{ tablename: string }>(
+        `SELECT tablename FROM pg_tables
        WHERE schemaname = 'public'
          AND tablename NOT IN ('migrations', '_zero_changes')
          AND tablename NOT LIKE '_zero_%'`
-    )
-    tables = result.rows
-  }
+      )
+      tables = result.rows
+    }
 
-  for (const { tablename } of tables) {
-    const quoted = '"' + tablename.replace(/"/g, '""') + '"'
-    await db.exec(`
+    for (const { tablename } of tables) {
+      const quoted = '"' + tablename.replace(/"/g, '""') + '"'
+      await db.exec(`
       DROP TRIGGER IF EXISTS _zero_notify_trigger ON public.${quoted};
       CREATE TRIGGER _zero_notify_trigger
         AFTER INSERT OR UPDATE OR DELETE ON public.${quoted}
         FOR EACH STATEMENT EXECUTE FUNCTION public._zero_notify_change();
     `)
-  }
-
-  // build primary key lookup for all public tables
-  const tableKeyColumns = new Map<string, Set<string>>()
-  const pkResult = await db.query<{ table_name: string; column_name: string }>(
-    `SELECT tc.table_name, kcu.column_name
-     FROM information_schema.table_constraints tc
-     JOIN information_schema.key_column_usage kcu
-       ON tc.constraint_name = kcu.constraint_name
-       AND tc.table_schema = kcu.table_schema
-     WHERE tc.constraint_type = 'PRIMARY KEY'
-       AND tc.table_schema = 'public'`
-  )
-  for (const { table_name, column_name } of pkResult.rows) {
-    let keys = tableKeyColumns.get(table_name)
-    if (!keys) {
-      keys = new Set()
-      tableKeyColumns.set(table_name, keys)
     }
-    keys.add(column_name)
-  }
-  log.debug.proxy(`loaded primary keys for ${tableKeyColumns.size} tables`)
 
-  // build excluded columns lookup (types zero-cache can't handle)
-  const excludedColumns = new Map<string, Set<string>>()
-  const UNSUPPORTED_TYPES = new Set(['tsvector', 'tsquery', 'USER-DEFINED'])
-  const colResult = await db.query<{ table_name: string; column_name: string; data_type: string }>(
-    `SELECT table_name, column_name, data_type
-     FROM information_schema.columns
-     WHERE table_schema = 'public'`
-  )
-  for (const { table_name, column_name, data_type } of colResult.rows) {
-    if (UNSUPPORTED_TYPES.has(data_type)) {
-      let cols = excludedColumns.get(table_name)
-      if (!cols) {
-        cols = new Set()
-        excludedColumns.set(table_name, cols)
+    // discover shard schemas (e.g. chat_0) and install NOTIFY triggers
+    const shardSchemas = await db.query<{ nspname: string }>(
+      `SELECT nspname FROM pg_namespace
+     WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'public')
+       AND nspname NOT LIKE 'pg_%'
+       AND nspname NOT LIKE 'zero_%'
+       AND nspname NOT LIKE '_zero_%'
+       AND nspname NOT LIKE '%/%'`
+    )
+    const relevantSchemas = ['public', ...shardSchemas.rows.map((r) => r.nspname)]
+
+    for (const schema of relevantSchemas) {
+      if (schema === 'public') continue
+      const shardTables = await db.query<{ tablename: string }>(
+        `SELECT tablename FROM pg_tables WHERE schemaname = $1`,
+        [schema]
+      )
+      for (const { tablename } of shardTables.rows) {
+        const quotedSchema = '"' + schema.replace(/"/g, '""') + '"'
+        const quotedTable = '"' + tablename.replace(/"/g, '""') + '"'
+        await db.exec(`
+        DROP TRIGGER IF EXISTS _zero_notify_trigger ON ${quotedSchema}.${quotedTable};
+        CREATE TRIGGER _zero_notify_trigger
+          AFTER INSERT OR UPDATE OR DELETE ON ${quotedSchema}.${quotedTable}
+          FOR EACH STATEMENT EXECUTE FUNCTION public._zero_notify_change();
+      `)
       }
-      cols.add(column_name)
+      if (shardTables.rows.length > 0) {
+        log.debug.proxy(
+          `installed notify triggers on ${shardTables.rows.length} tables in schema "${schema}"`
+        )
+      }
     }
-  }
-  if (excludedColumns.size > 0) {
-    log.debug.proxy(`excluding unsupported columns: ${[...excludedColumns.entries()].map(([t, c]) => `${t}(${[...c].join(',')})`).join(', ')}`)
+
+    // build primary key lookup for all relevant schemas
+    for (const schema of relevantSchemas) {
+      const pkResult = await db.query<{ table_name: string; column_name: string }>(
+        `SELECT tc.table_name, kcu.column_name
+       FROM information_schema.table_constraints tc
+       JOIN information_schema.key_column_usage kcu
+         ON tc.constraint_name = kcu.constraint_name
+         AND tc.table_schema = kcu.table_schema
+       WHERE tc.constraint_type = 'PRIMARY KEY'
+         AND tc.table_schema = $1`,
+        [schema]
+      )
+      for (const { table_name, column_name } of pkResult.rows) {
+        const key = `${schema}.${table_name}`
+        let keys = tableKeyColumns.get(key)
+        if (!keys) {
+          keys = new Set()
+          tableKeyColumns.set(key, keys)
+        }
+        keys.add(column_name)
+      }
+    }
+    log.debug.proxy(`loaded primary keys for ${tableKeyColumns.size} tables`)
+
+    // build excluded columns lookup (types zero-cache can't handle)
+    // also track boolean columns so we can send correct typeOid (16) in RELATION messages.
+    const UNSUPPORTED_TYPES = new Set(['tsvector', 'tsquery', 'USER-DEFINED'])
+    for (const schema of relevantSchemas) {
+      const colResult = await db.query<{
+        table_name: string
+        column_name: string
+        data_type: string
+      }>(
+        `SELECT table_name, column_name, data_type
+       FROM information_schema.columns
+       WHERE table_schema = $1`,
+        [schema]
+      )
+      for (const { table_name, column_name, data_type } of colResult.rows) {
+        const key = `${schema}.${table_name}`
+        if (UNSUPPORTED_TYPES.has(data_type)) {
+          let cols = excludedColumns.get(key)
+          if (!cols) {
+            cols = new Set()
+            excludedColumns.set(key, cols)
+          }
+          cols.add(column_name)
+        }
+        if (data_type === 'boolean') {
+          let cols = booleanColumns.get(key)
+          if (!cols) {
+            cols = new Set()
+            booleanColumns.set(key, cols)
+          }
+          cols.add(column_name)
+        }
+      }
+    }
+    if (excludedColumns.size > 0) {
+      log.debug.proxy(
+        `excluding unsupported columns: ${[...excludedColumns.entries()].map(([t, c]) => `${t}(${[...c].join(',')})`).join(', ')}`
+      )
+    }
+  } finally {
+    pgMutex.release()
   }
 
   // track which tables we've sent RELATION messages for
@@ -356,10 +439,25 @@ export async function handleStartReplication(
   const poll = async () => {
     while (running) {
       try {
-        const changes = await getChangesSince(db, lastWatermark, 100)
+        // acquire mutex to avoid conflicting with proxy connections
+        await pgMutex.acquire()
+        let changes: Awaited<ReturnType<typeof getChangesSince>>
+        try {
+          changes = await getChangesSince(db, lastWatermark, 100)
+        } finally {
+          pgMutex.release()
+        }
 
         if (changes.length > 0) {
-          await streamChanges(changes, writer, sentRelations, txCounter++, tableKeyColumns, excludedColumns)
+          await streamChanges(
+            changes,
+            writer,
+            sentRelations,
+            txCounter++,
+            tableKeyColumns,
+            excludedColumns,
+            booleanColumns
+          )
           lastWatermark = changes[changes.length - 1].watermark
         }
 
@@ -391,7 +489,8 @@ async function streamChanges(
   sentRelations: Set<string>,
   txId: number,
   tableKeyColumns: Map<string, Set<string>>,
-  excludedColumns: Map<string, Set<string>>
+  excludedColumns: Map<string, Set<string>>,
+  booleanColumns: Map<string, Set<string>>
 ): Promise<void> {
   const ts = nowMicros()
   const lsn = nextLsn()
@@ -401,8 +500,15 @@ async function streamChanges(
   writer.write(wrapCopyData(beginMsg))
 
   for (const change of changes) {
-    const tableOid = getTableOid(change.table_name)
-    const excluded = excludedColumns.get(change.table_name)
+    // parse schema-qualified name (schema.table or bare table)
+    const dot = change.table_name.indexOf('.')
+    const schema = dot !== -1 ? change.table_name.substring(0, dot) : 'public'
+    const tableName =
+      dot !== -1 ? change.table_name.substring(dot + 1) : change.table_name
+    const qualifiedKey = `${schema}.${tableName}`
+
+    const tableOid = getTableOid(qualifiedKey)
+    const excluded = excludedColumns.get(qualifiedKey)
 
     // filter out unsupported columns from row data
     let rowData = change.row_data
@@ -423,17 +529,19 @@ async function streamChanges(
     const row = rowData || oldData
     if (!row) continue
 
-    const keySet = tableKeyColumns.get(change.table_name)
+    const keySet = tableKeyColumns.get(qualifiedKey)
+    const boolSet = booleanColumns.get(qualifiedKey)
     const columns = inferColumns(row).map((col) => ({
       ...col,
+      typeOid: boolSet?.has(col.name) ? 16 : col.typeOid,
       isKey: keySet?.has(col.name) ?? false,
     }))
 
     // send RELATION if not yet sent
-    if (!sentRelations.has(change.table_name)) {
-      const relMsg = encodeRelation(tableOid, 'public', change.table_name, 0x64, columns)
+    if (!sentRelations.has(qualifiedKey)) {
+      const relMsg = encodeRelation(tableOid, schema, tableName, 0x64, columns)
       writer.write(wrapCopyData(wrapXLogData(lsn, lsn, ts, relMsg)))
-      sentRelations.add(change.table_name)
+      sentRelations.add(qualifiedKey)
     }
 
     // send the change
