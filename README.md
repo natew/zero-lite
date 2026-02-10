@@ -9,7 +9,7 @@ bunx orez
 Starts PGlite (WASM Postgres), a TCP proxy, and zero-cache with WASM SQLite. Exports a CLI, programmatic API, and Vite plugin. Comes with PGlite extensions `pgvector` and `pg_trgm` enabled by default.
 
 <p align="center">
-  <img src="logo.svg" alt="orez" width="120" />
+  <img src="logo.svg" alt="orez" width="320" />
 </p>
 
 ## Install
