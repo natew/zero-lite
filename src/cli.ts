@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { defineCommand, runMain } from 'citty'
@@ -104,6 +104,84 @@ const pgDumpCommand = defineCommand({
   },
 })
 
+// extensions that don't exist in pglite — skip during restore
+const UNSUPPORTED_EXTENSIONS = new Set([
+  'pg_stat_statements',
+  'pg_buffercache',
+  'pg_freespacemap',
+  'pg_prewarm',
+  'pg_stat_kcache',
+  'pg_wait_sampling',
+  'auto_explain',
+  'pg_cron',
+])
+
+// check if a statement should be skipped during restore
+function shouldSkipStatement(stmt: string): boolean {
+  const trimmed = stmt.trimStart()
+  // skip psql meta-commands like \restrict
+  if (trimmed.startsWith('\\')) return true
+  // skip SET transaction_timeout (pg 18+ artifact)
+  if (/^SET\s+transaction_timeout\b/i.test(trimmed)) return true
+  // skip CREATE/DROP/COMMENT ON unsupported extensions
+  const extMatch = trimmed.match(
+    /^(?:CREATE\s+EXTENSION|DROP\s+EXTENSION|COMMENT\s+ON\s+EXTENSION)\b.*?\b(\w+)/i
+  )
+  if (extMatch && UNSUPPORTED_EXTENSIONS.has(extMatch[1])) return true
+  return false
+}
+
+// stream a sql dump file statement-by-statement, skipping unsupported ones
+async function execDumpFile(
+  db: { exec: (sql: string) => Promise<unknown> },
+  filePath: string
+): Promise<{ executed: number; skipped: number }> {
+  const { createReadStream } = await import('node:fs')
+  const { createInterface } = await import('node:readline')
+
+  const rl = createInterface({
+    input: createReadStream(filePath, 'utf-8'),
+    crlfDelay: Infinity,
+  })
+
+  let buf = ''
+  let executed = 0
+  let skipped = 0
+
+  for await (const line of rl) {
+    // skip empty lines and sql comments
+    if (line === '' || line.startsWith('--')) continue
+
+    buf += (buf ? '\n' : '') + line
+
+    // statements end with ; at end of line (pg_dump always formats this way)
+    if (!line.trimEnd().endsWith(';')) continue
+
+    const stmt = buf
+    buf = ''
+
+    if (shouldSkipStatement(stmt)) {
+      skipped++
+      continue
+    }
+
+    await db.exec(stmt)
+    executed++
+  }
+
+  // flush any remaining buffer
+  if (buf.trim()) {
+    if (!shouldSkipStatement(buf)) {
+      await db.exec(buf)
+      executed++
+    } else {
+      skipped++
+    }
+  }
+
+  return { executed, skipped }
+}
+
 const pgRestoreCommand = defineCommand({
   meta: {
     name: 'pg_restore',
@@ -138,7 +216,6 @@ const pgRestoreCommand = defineCommand({
     }
 
     const dataPath = resolve(args['data-dir'], 'pgdata-postgres')
-    const sql = readFileSync(sqlFile, 'utf-8')
 
     let db: InstanceType<typeof PGlite> | undefined
     try {
@@ -154,8 +231,10 @@ const pgRestoreCommand = defineCommand({
         await db.exec('CREATE SCHEMA public')
       }
 
-      await db.exec(sql)
-      log.orez(`restored ${sqlFile} into ${dataPath}`)
+      const { executed, skipped } = await execDumpFile(db, sqlFile)
+      log.orez(
+        `restored ${sqlFile} into ${dataPath} (${executed} statements, ${skipped} skipped)`
+      )
     } catch (err: any) {
       if (err?.message?.includes('lock')) {
         console.error(

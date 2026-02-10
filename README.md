@@ -238,6 +238,14 @@ pg_restore options:
   --clean             drop and recreate public schema before restoring
 ```
 
+Restore streams the dump file statement-by-statement so it can handle large dumps without loading everything into memory. It also automatically filters out things PGlite can't handle:
+
+- Extensions not available in PGlite (`pg_stat_statements`, `pg_buffercache`, `pg_cron`, etc.)
+- `SET transaction_timeout` (PostgreSQL 18+ artifact)
+- psql meta-commands like `\restrict`
+
+This means you can take a dump from a production Postgres database and restore it directly into orez — unsupported statements are silently skipped and the rest executes normally.
+
 orez must not be running when using these commands — PGlite data directories are single-process. The commands will detect a locked database and tell you to stop orez first.
 
 Standard Postgres tools (`pg_dump`, `pg_restore`, `psql`) also work against the running proxy since orez presents a standard PostgreSQL 16.4 version string over the wire.
