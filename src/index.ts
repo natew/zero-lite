@@ -235,7 +235,10 @@ function writeSqliteShim(): string {
 
   const registerPath = resolve(dir, 'register.mjs')
   const registerTemplate = readFileSync(resolve(shimDir, 'register.mjs'), 'utf-8')
-  writeFileSync(registerPath, registerTemplate.replace(/__HOOKS_URL__/g, `file://${hooksPath}`))
+  writeFileSync(
+    registerPath,
+    registerTemplate.replace(/__HOOKS_URL__/g, `file://${hooksPath}`)
+  )
 
   return registerPath
 }
@@ -306,8 +309,7 @@ async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
     env.NODE_OPTIONS =
       `--import ${registerUrl} --max-old-space-size=${heapMB} ${existing}`.trim()
   } else {
-    env.NODE_OPTIONS =
-      `--max-old-space-size=${heapMB} ${existing}`.trim()
+    env.NODE_OPTIONS = `--max-old-space-size=${heapMB} ${existing}`.trim()
   }
 
   const child = spawn(zeroCacheBin, [], {

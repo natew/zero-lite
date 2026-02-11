@@ -1,14 +1,17 @@
 // esm loader hooks — intercept @rocicorp/zero-sqlite3 with bedrock-sqlite wasm.
 // __BEDROCK_PATH__ is replaced at runtime by orez before writing to tmpdir.
 
-const SHIM_URL = 'orez-sqlite-shim://shim';
-const BEDROCK_PATH = '__BEDROCK_PATH__';
+const SHIM_URL = 'orez-sqlite-shim://shim'
+const BEDROCK_PATH = '__BEDROCK_PATH__'
 
 export function resolve(specifier, context, nextResolve) {
-  if (specifier === '@rocicorp/zero-sqlite3' || specifier.startsWith('@rocicorp/zero-sqlite3/')) {
-    return { url: SHIM_URL, shortCircuit: true };
+  if (
+    specifier === '@rocicorp/zero-sqlite3' ||
+    specifier.startsWith('@rocicorp/zero-sqlite3/')
+  ) {
+    return { url: SHIM_URL, shortCircuit: true }
   }
-  return nextResolve(specifier, context);
+  return nextResolve(specifier, context)
 }
 
 export function load(url, context, nextLoad) {
@@ -53,8 +56,8 @@ Database.SQLITE_SCANSTAT_NCYCLE = 7;
 Database.SQLITE_SCANSTAT_COMPLEX = 8;
 export default Database;
 export { SqliteError };
-`
-    };
+`,
+    }
   }
-  return nextLoad(url, context);
+  return nextLoad(url, context)
 }
