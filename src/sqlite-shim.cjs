@@ -54,22 +54,16 @@ if (!StmtProto.safeIntegers) {
     return this
   }
 }
-if (!StmtProto.scanStatus) {
-  // returns undefined immediately to signal no scan stats available.
-  // zero-cache loops calling scanStatus(idx++) until it returns undefined.
-  StmtProto.scanStatus = function () {
-    return undefined
-  }
+// unconditionally override scanStatus — bedrock-sqlite may have a broken
+// native impl that returns non-undefined garbage, causing infinite loops
+// in zero-cache's getScanstatusLoops
+StmtProto.scanStatus = function () {
+  return undefined
 }
-if (!StmtProto.scanStatusV2) {
-  // returns empty stats - zero-cache uses this for query performance tracking
-  StmtProto.scanStatusV2 = function () {
-    return []
-  }
+StmtProto.scanStatusV2 = function () {
+  return []
 }
-if (!StmtProto.scanStatusReset) {
-  StmtProto.scanStatusReset = function () {}
-}
+StmtProto.scanStatusReset = function () {}
 
 tmpDb.close()
 

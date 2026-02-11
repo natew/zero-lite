@@ -9,7 +9,8 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { basename, dirname, resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { getConfig, getConnectionString } from './config.js'
 import { log, port, setLogLevel } from './log.js'
@@ -249,156 +250,12 @@ async function seedIfNeeded(db: PGlite, config: ZeroLiteConfig): Promise<void> {
   log.orez('seeded')
 }
 
-function patchSqliteForWasm(): void {
-  // replace @rocicorp/zero-sqlite3 with bedrock-sqlite (wasm) so
-  // zero-cache uses wasm instead of native bindings
-  try {
-    // find the package — import.meta.resolve may fail if native build
-    // didn't produce lib/index.js, so fall back to manual lookup
-    let libDir: string
-    const sqliteEntry = resolvePackage('@rocicorp/zero-sqlite3')
-    if (sqliteEntry) {
-      libDir = resolve(sqliteEntry, '..')
-    } else {
-      // native build likely failed, find package via @rocicorp/zero
-      const zeroEntry = resolvePackage('@rocicorp/zero')
-      // walk up to find the actual node_modules dir (entry depth varies)
-      let nodeModules = dirname(zeroEntry)
-      while (nodeModules !== '/' && basename(nodeModules) !== 'node_modules') {
-        nodeModules = dirname(nodeModules)
-      }
-      const pkgDir = resolve(nodeModules, '@rocicorp', 'zero-sqlite3')
-      if (!existsSync(resolve(pkgDir, 'package.json'))) {
-        log.debug.orez('@rocicorp/zero-sqlite3 not found, skipping wasm patch')
-        return
-      }
-      libDir = resolve(pkgDir, 'lib')
-      mkdirSync(libDir, { recursive: true })
-    }
-    const indexPath = resolve(libDir, 'index.js')
-
-    // check if already patched
-    if (existsSync(indexPath)) {
-      const current = readFileSync(indexPath, 'utf-8')
-      if (current.includes('OrigDatabase')) return // already patched
-    }
-
-    // back up originals before patching
-    if (existsSync(indexPath)) {
-      writeFileSync(indexPath + '.original', readFileSync(indexPath))
-    }
-    const dbBackupPath = resolve(libDir, 'database.js')
-    if (existsSync(dbBackupPath)) {
-      writeFileSync(dbBackupPath + '.original', readFileSync(dbBackupPath))
-    }
-
-    // resolve bedrock-sqlite's dist entry point
-    const bedrockEntry = resolvePackage('bedrock-sqlite')
-    if (!existsSync(bedrockEntry)) {
-      log.debug.orez('bedrock-sqlite not found, skipping wasm patch')
-      return
-    }
-
-    // inline the full shim into index.js - no external file dependency
-    const shim = `'use strict';
-// patched by orez: bedrock-sqlite (wasm) replaces native bindings
-var mod = require('${bedrockEntry}');
-var OrigDatabase = mod.Database;
-var SqliteError = mod.SqliteError;
-
-// wrap constructor to set busy_timeout on every connection immediately.
-function Database() {
-  var db = new OrigDatabase(...arguments);
-  try {
-    db.pragma('busy_timeout = 30000');
-    db.pragma('synchronous = normal');
-    // reduce page cache from compile-time 64MB to 8MB.
-    // wasm keeps page cache inside V8 heap (unlike native),
-    // so a smaller cache prevents OOM during initial sync.
-    db.pragma('cache_size = -8000');
-  } catch(e) {}
-  return db;
-}
-Database.prototype = OrigDatabase.prototype;
-Database.prototype.constructor = Database;
-Object.keys(OrigDatabase).forEach(function(k) { Database[k] = OrigDatabase[k]; });
-
-// unsafeMode enables resetting sibling statements before commit/rollback
-// (native better-sqlite3 does this in C++, we do it in JS in api.js)
-Database.prototype.unsafeMode = function(enabled) {
-  if (enabled === undefined) enabled = true;
-  this._unsafe = !!enabled;
-  return this;
-};
-if (!Database.prototype.defaultSafeIntegers) Database.prototype.defaultSafeIntegers = function() { return this; };
-if (!Database.prototype.serialize) Database.prototype.serialize = function() { throw new Error('not supported in wasm'); };
-if (!Database.prototype.backup) Database.prototype.backup = function() { throw new Error('not supported in wasm'); };
-
-// patch Statement prototype
-var tmpDb = new OrigDatabase(':memory:');
-var tmpStmt = tmpDb.prepare('SELECT 1');
-var SP = Object.getPrototypeOf(tmpStmt);
-if (!SP.safeIntegers) SP.safeIntegers = function() { return this; };
-// unconditionally override scanStatus — bedrock-sqlite may have a broken
-// native impl that returns non-undefined garbage, causing infinite loops
-// in zero-cache's getScanstatusLoops
-SP.scanStatus = function() { return undefined; };
-SP.scanStatusV2 = function() { return []; };
-SP.scanStatusReset = function() {};
-tmpDb.close();
-
-// scanstat constants
-Database.SQLITE_SCANSTAT_NLOOP = 0;
-Database.SQLITE_SCANSTAT_NVISIT = 1;
-Database.SQLITE_SCANSTAT_EST = 2;
-Database.SQLITE_SCANSTAT_NAME = 3;
-Database.SQLITE_SCANSTAT_EXPLAIN = 4;
-Database.SQLITE_SCANSTAT_SELECTID = 5;
-Database.SQLITE_SCANSTAT_PARENTID = 6;
-Database.SQLITE_SCANSTAT_NCYCLE = 7;
-Database.SQLITE_SCANSTAT_COMPLEX = 8;
-
-module.exports = Database;
-module.exports.SqliteError = SqliteError;
-`
-    writeFileSync(indexPath, shim)
-
-    // also patch database.js since it has top-level native addon loading
-    const dbPath = resolve(libDir, 'database.js')
-    if (existsSync(dbPath)) {
-      writeFileSync(dbPath, `'use strict';\nmodule.exports = require('./index');\n`)
-    }
-
-    log.debug.orez('patched @rocicorp/zero-sqlite3 -> bedrock-sqlite (wasm)')
-  } catch (e) {
-    log.orez(`sqlite wasm patch failed: ${e}`)
-  }
-}
-
-function unpatchSqliteWasm(): void {
-  // restore native @rocicorp/zero-sqlite3 if it was previously patched
-  try {
-    const sqliteEntry = resolvePackage('@rocicorp/zero-sqlite3')
-    if (!sqliteEntry) return
-    const libDir = resolve(sqliteEntry, '..')
-    const indexPath = resolve(libDir, 'index.js')
-    if (!existsSync(indexPath)) return
-    const current = readFileSync(indexPath, 'utf-8')
-    if (!current.includes('OrigDatabase')) return // not patched
-
-    // restore from backups if available
-    for (const file of ['index.js', 'database.js']) {
-      const filePath = resolve(libDir, file)
-      const backupPath = filePath + '.original'
-      if (existsSync(backupPath)) {
-        writeFileSync(filePath, readFileSync(backupPath))
-      }
-    }
-    log.orez('restored native @rocicorp/zero-sqlite3 (removed wasm patch)')
-  } catch (e) {
-    log.orez(`failed to restore native sqlite: ${e}`)
-  }
-}
+// resolve path to the --require hook for sqlite.
+// the loader tries native @rocicorp/zero-sqlite3 first, falling back to
+// bedrock-sqlite (wasm) if native bindings aren't available.
+// loaded via NODE_OPTIONS — no files in node_modules are modified.
+const __dirname_esm = dirname(fileURLToPath(import.meta.url))
+const sqliteLoaderPath = resolve(__dirname_esm, 'sqlite-loader.cjs')
 
 async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
   // resolve @rocicorp/zero entry for finding zero-cache modules
@@ -408,11 +265,7 @@ async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
     throw new Error('zero-cache not found. install @rocicorp/zero')
   }
 
-  // patch sqlite to use wasm before starting zero-cache (unless disabled)
-  if (!config.disableWasmSqlite) {
-    patchSqliteForWasm()
-  } else {
-    unpatchSqliteWasm()
+  if (config.disableWasmSqlite) {
     log.debug.orez('wasm sqlite disabled, using native @rocicorp/zero-sqlite3')
   }
 
@@ -425,10 +278,13 @@ async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
     NODE_ENV: 'development',
     ZERO_LOG_LEVEL: config.logLevel,
     ZERO_NUM_SYNC_WORKERS: '1',
-    // wasm sqlite's scanStatus returns non-undefined garbage that causes
-    // infinite loops in getScanstatusLoops. disable the query planner to
-    // avoid the code path entirely (planner is an optimization, not required).
-    ZERO_ENABLE_QUERY_PLANNER: 'false',
+  }
+
+  // when wasm sqlite may be used, disable the query planner — wasm's
+  // scanStatus returns garbage that causes infinite loops in zero-cache.
+  // when user forces native (--disable-wasm-sqlite), planner is safe.
+  if (!config.disableWasmSqlite) {
+    defaults.ZERO_ENABLE_QUERY_PLANNER = 'false'
   }
 
   const env: Record<string, string> = {
@@ -449,10 +305,10 @@ async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
     throw new Error('zero-cache cli.js not found. install @rocicorp/zero')
   }
 
-  // wasm sqlite keeps page cache + WAL buffers inside V8 heap.
-  // increase heap limit for spawned zero-cache processes.
+  // sqlite loader: tries native first, falls back to wasm. when user forces
+  // native via --disable-wasm-sqlite, skip the loader entirely.
   const nodeOptions = !config.disableWasmSqlite
-    ? `--max-old-space-size=16384 ${process.env.NODE_OPTIONS || ''}`
+    ? `--require ${sqliteLoaderPath} --max-old-space-size=16384 ${process.env.NODE_OPTIONS || ''}`
     : process.env.NODE_OPTIONS || ''
   if (nodeOptions.trim()) env.NODE_OPTIONS = nodeOptions.trim()
 
