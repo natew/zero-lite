@@ -6,7 +6,7 @@
 bunx orez
 ```
 
-Starts PGlite (WASM Postgres), a TCP proxy, and zero-cache with WASM SQLite. Exports a CLI, programmatic API, and Vite plugin. Comes with PGlite extensions `pgvector` and `pg_trgm` enabled by default.
+Starts PGlite (WASM Postgres), a TCP proxy, and zero-cache with WASM SQLite. Exports a CLI, programmatic API, and Vite plugin. Comes with PGlite extensions `pgvector` and `pg_trgm` enabled by default. Includes `pg_dump` and `pg_restore` subcommands that can restore production Postgres dumps directly into PGlite — handling COPY→INSERT conversion, unsupported extension filtering, idempotent DDL rewriting, and WASM memory management automatically.
 
 <p align="center">
   <img src="logo.svg" alt="orez" width="320" />
