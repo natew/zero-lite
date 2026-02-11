@@ -263,9 +263,22 @@ export async function execDumpFile(
     const colList =
       copyTarget.columns.length > 0 ? ` (${copyTarget.columns.join(', ')})` : ''
     const insert = `INSERT INTO ${copyTarget.table}${colList} VALUES ${copyRows.join(', ')}`
-    await db.exec(insert)
-    executed += copyRows.length
-    batchCount += copyRows.length
+    try {
+      await db.exec(insert)
+      executed += copyRows.length
+      batchCount += copyRows.length
+    } catch (err: any) {
+      log.orez(`warning: ${err?.message?.split('\n')[0] ?? err}`)
+      skipped += copyRows.length
+      // transaction is aborted, rollback and start fresh
+      if (inBatch) {
+        try {
+          await db.exec('ROLLBACK')
+        } catch {}
+        inBatch = false
+        batchCount = 0
+      }
+    }
     copyRows = []
     copyRowsBytes = 0
   }
