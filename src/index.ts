@@ -10,7 +10,6 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 import { getConfig, getConnectionString } from './config.js'
 import { log, port, setLogLevel } from './log.js'
@@ -250,12 +249,69 @@ async function seedIfNeeded(db: PGlite, config: ZeroLiteConfig): Promise<void> {
   log.orez('seeded')
 }
 
-// resolve path to the --require hook for sqlite.
-// the loader tries native @rocicorp/zero-sqlite3 first, falling back to
-// bedrock-sqlite (wasm) if native bindings aren't available.
-// loaded via NODE_OPTIONS — no files in node_modules are modified.
-const __dirname_esm = dirname(fileURLToPath(import.meta.url))
-const sqliteLoaderPath = resolve(__dirname_esm, 'sqlite-loader.cjs')
+// create a fake @rocicorp/zero-sqlite3 package in tmpdir that redirects to
+// bedrock-sqlite (wasm). uses NODE_PATH to make node resolve our shim first —
+// no require hooks, no Module._resolveFilename monkey-patching, no .cjs files
+// in the package (which all break vite).
+function writeSqliteShim(): string {
+  const tmp = process.env.TMPDIR || process.env.TEMP || '/tmp'
+  const dir = resolve(tmp, 'orez-sqlite', 'node_modules', '@rocicorp', 'zero-sqlite3')
+  mkdirSync(dir, { recursive: true })
+
+  const bedrockEntry = resolvePackage('bedrock-sqlite')
+
+  writeFileSync(
+    resolve(dir, 'package.json'),
+    '{"name":"@rocicorp/zero-sqlite3","main":"./index.js"}\n'
+  )
+
+  writeFileSync(
+    resolve(dir, 'index.js'),
+    `'use strict';
+var mod = require('${bedrockEntry}');
+var OrigDatabase = mod.Database;
+var SqliteError = mod.SqliteError;
+function Database() {
+  var db = new OrigDatabase(...arguments);
+  try {
+    db.pragma('journal_mode = delete');
+    db.pragma('busy_timeout = 30000');
+    db.pragma('synchronous = normal');
+  } catch(e) {}
+  return db;
+}
+Database.prototype = OrigDatabase.prototype;
+Database.prototype.constructor = Database;
+Object.keys(OrigDatabase).forEach(function(k) { Database[k] = OrigDatabase[k]; });
+Database.prototype.unsafeMode = function() { return this; };
+if (!Database.prototype.defaultSafeIntegers) Database.prototype.defaultSafeIntegers = function() { return this; };
+if (!Database.prototype.serialize) Database.prototype.serialize = function() { throw new Error('not supported in wasm'); };
+if (!Database.prototype.backup) Database.prototype.backup = function() { throw new Error('not supported in wasm'); };
+var tmpDb = new OrigDatabase(':memory:');
+var tmpStmt = tmpDb.prepare('SELECT 1');
+var SP = Object.getPrototypeOf(tmpStmt);
+if (!SP.safeIntegers) SP.safeIntegers = function() { return this; };
+SP.scanStatus = function() { return undefined; };
+SP.scanStatusV2 = function() { return []; };
+SP.scanStatusReset = function() {};
+tmpDb.close();
+Database.SQLITE_SCANSTAT_NLOOP = 0;
+Database.SQLITE_SCANSTAT_NVISIT = 1;
+Database.SQLITE_SCANSTAT_EST = 2;
+Database.SQLITE_SCANSTAT_NAME = 3;
+Database.SQLITE_SCANSTAT_EXPLAIN = 4;
+Database.SQLITE_SCANSTAT_SELECTID = 5;
+Database.SQLITE_SCANSTAT_PARENTID = 6;
+Database.SQLITE_SCANSTAT_NCYCLE = 7;
+Database.SQLITE_SCANSTAT_COMPLEX = 8;
+module.exports = Database;
+module.exports.SqliteError = SqliteError;
+`
+  )
+
+  // return the node_modules root so it can be prepended to NODE_PATH
+  return resolve(tmp, 'orez-sqlite', 'node_modules')
+}
 
 async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
   // resolve @rocicorp/zero entry for finding zero-cache modules
@@ -302,10 +358,19 @@ async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
     throw new Error('zero-cache cli.js not found. install @rocicorp/zero')
   }
 
-  // sqlite loader: tries native first, falls back to wasm. when user forces
-  // native via --disable-wasm-sqlite, skip the loader entirely.
+  // wasm sqlite: create a fake @rocicorp/zero-sqlite3 in tmpdir and prepend
+  // to NODE_PATH so node resolves our shim first. no require hooks, no
+  // Module._resolveFilename monkey-patching (which conflicts with vite).
+  if (!config.disableWasmSqlite) {
+    const shimNodeModules = writeSqliteShim()
+    const existingNodePath = process.env.NODE_PATH || ''
+    env.NODE_PATH = existingNodePath
+      ? `${shimNodeModules}:${existingNodePath}`
+      : shimNodeModules
+  }
+
   const nodeOptions = !config.disableWasmSqlite
-    ? `--require ${sqliteLoaderPath} --max-old-space-size=16384 ${process.env.NODE_OPTIONS || ''}`
+    ? `--max-old-space-size=16384 ${process.env.NODE_OPTIONS || ''}`
     : process.env.NODE_OPTIONS || ''
   if (nodeOptions.trim()) env.NODE_OPTIONS = nodeOptions.trim()
 
