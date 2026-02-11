@@ -69,11 +69,11 @@ All options are optional with sensible defaults. Ports auto-find if in use.
 
 ### Lifecycle hooks
 
-| Hook | CLI | Programmatic | When |
-| --- | --- | --- | --- |
-| on-db-ready | `--on-db-ready=CMD` | `onDbReady: 'CMD'` | after db + proxy are ready, before zero-cache |
-| before-zero | — | `beforeZero: async (db) => {}` | after on-db-ready, before zero-cache (receives PGlite instance) |
-| on-healthy | `--on-healthy=CMD` | — | after all services are healthy |
+| Hook        | CLI                 | Programmatic                   | When                                                            |
+| ----------- | ------------------- | ------------------------------ | --------------------------------------------------------------- |
+| on-db-ready | `--on-db-ready=CMD` | `onDbReady: 'CMD'`             | after db + proxy are ready, before zero-cache                   |
+| before-zero | —                   | `beforeZero: async (db) => {}` | after on-db-ready, before zero-cache (receives PGlite instance) |
+| on-healthy  | `--on-healthy=CMD`  | —                              | after all services are healthy                                  |
 
 CLI hooks receive env vars: `DATABASE_URL`, `OREZ_PG_PORT`, `OREZ_ZERO_PORT`. Change tracking triggers are automatically re-installed after `onDbReady` and `beforeZero` run, so tables created by those hooks are tracked without extra setup.
 
@@ -252,7 +252,7 @@ After restore, orez drops triggers whose backing functions don't exist. This hap
 
 ### Restore: wire protocol auto-detection
 
-`pg_restore` tries connecting via wire protocol first (for restoring into a running orez instance). If the connection fails, it falls back to direct PGlite access. But if the connection succeeds and the restore itself fails, it does *not* fall back — the error is real and should be reported, not masked by a retry.
+`pg_restore` tries connecting via wire protocol first (for restoring into a running orez instance). If the connection fails, it falls back to direct PGlite access. But if the connection succeeds and the restore itself fails, it does _not_ fall back — the error is real and should be reported, not masked by a retry.
 
 ### Callback-based message loop
 
