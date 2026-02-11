@@ -12,12 +12,6 @@ Starts PGlite (WASM Postgres), a TCP proxy, and zero-cache with WASM SQLite. Exp
   <img src="logo.svg" alt="orez is hebrew for rice — zero, pglite, and sqlite-wasm hanging out" width="320" />
 </p>
 
-## Install
-
-```
-bun install orez
-```
-
 ## CLI
 
 ```
@@ -44,6 +38,10 @@ bunx orez
 Ports auto-increment if already in use.
 
 ## Programmatic
+
+```
+bun install orez
+```
 
 ```typescript
 import { startZeroLite } from 'orez'
