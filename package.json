@@ -21,7 +21,7 @@
     }
   },
   "bin": {
-    "orez": "./dist/cli.js"
+    "orez": "./dist/cli-entry.js"
   },
   "files": [
     "dist",
