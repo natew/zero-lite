@@ -93,6 +93,9 @@ if (hasSqliteWasm && sqliteNext) {
 }
 writeFileSync(orezPkgPath, JSON.stringify(orezPkg, null, 2) + '\n')
 
+// regenerate lockfile after version bumps
+run('bun install')
+
 if (dryRun) {
   console.info(`\n[dry-run] would publish orez@${orezNext}`)
   if (hasSqliteWasm) console.info(`[dry-run] would publish bedrock-sqlite@${sqliteNext}`)
@@ -127,6 +130,9 @@ if (hasSqliteWasm) {
   console.info('\npublishing bedrock-sqlite...')
   run('bun publish', { cwd: sqliteWasmDir })
 }
+
+// format before commit
+run('bun run format')
 
 // git commit + tag + push
 const tag = `v${orezNext}`
