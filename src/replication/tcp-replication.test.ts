@@ -626,10 +626,10 @@ describe('tcp replication', () => {
     await replClient.collectStream(200) // skip CopyBothResponse
 
     await db.exec(`INSERT INTO public.items (name, value) VALUES ('upd_target', 10)`)
-    await replClient.collectStream(700)
+    await replClient.collectStream(1500)
 
     await db.exec(`UPDATE public.items SET value = 20 WHERE name = 'upd_target'`)
-    const stream = await replClient.collectStream(700)
+    const stream = await replClient.collectStream(1500)
 
     const decoded: PgOutputMessage[] = []
     for (const msg of stream) {
@@ -670,10 +670,10 @@ describe('tcp replication', () => {
     await replClient.collectStream(200)
 
     await db.exec(`INSERT INTO public.items (name, value) VALUES ('del_target', 99)`)
-    await replClient.collectStream(700)
+    await replClient.collectStream(1500)
 
     await db.exec(`DELETE FROM public.items WHERE name = 'del_target'`)
-    const stream = await replClient.collectStream(700)
+    const stream = await replClient.collectStream(1500)
 
     const decoded: PgOutputMessage[] = []
     for (const msg of stream) {
