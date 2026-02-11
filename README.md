@@ -67,17 +67,15 @@ await stop()
 
 All options are optional with sensible defaults. Ports auto-find if in use.
 
-### `beforeZero` hook
+### Lifecycle hooks
 
-Run setup logic after the database is ready but before zero-cache starts — useful for creating tables, seeding data, or deploying permissions:
+| Hook | CLI | Programmatic | When |
+| --- | --- | --- | --- |
+| on-db-ready | `--on-db-ready=CMD` | `onDbReady: 'CMD'` | after db + proxy are ready, before zero-cache |
+| before-zero | — | `beforeZero: async (db) => {}` | after on-db-ready, before zero-cache (receives PGlite instance) |
+| on-healthy | `--on-healthy=CMD` | — | after all services are healthy |
 
-```typescript
-const { stop } = await startZeroLite({
-  beforeZero: async (db) => {
-    await db.exec(`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT)`)
-  },
-})
-```
+CLI hooks receive env vars: `DATABASE_URL`, `OREZ_PG_PORT`, `OREZ_ZERO_PORT`. Change tracking triggers are automatically re-installed after `onDbReady` and `beforeZero` run, so tables created by those hooks are tracked without extra setup.
 
 ## Vite plugin
 
@@ -133,13 +131,11 @@ The replication handler also tracks shard schema tables so that `.server` promis
 
 ### Zero native dependencies
 
-The whole point of orez is that `bunx orez` works everywhere with no native compilation step. Postgres runs in-process as WASM via PGlite. But zero-cache also needs SQLite, and `@rocicorp/zero-sqlite3` ships as a compiled C addon — which means `node-gyp`, build tools, and platform-specific binaries.
-
-orez ships its own package, [bedrock-sqlite](https://www.npmjs.com/package/bedrock-sqlite) — SQLite's [bedrock branch](https://sqlite.org/src/timeline?t=begin-concurrent) recompiled to WASM with BEGIN CONCURRENT and WAL2 support. At startup, orez patches `@rocicorp/zero-sqlite3` to load bedrock-sqlite instead of the native C addon. Both databases run as WASM — nothing to compile, nothing platform-specific. Just `bun install` and go.
+The whole point of orez is that `bunx orez` works everywhere with no native compilation step. Postgres runs in-process as WASM via PGlite. zero-cache also needs SQLite, and `@rocicorp/zero-sqlite3` ships as a compiled C addon — so orez ships [bedrock-sqlite](https://www.npmjs.com/package/bedrock-sqlite), SQLite's [bedrock branch](https://sqlite.org/src/timeline?t=begin-concurrent) recompiled to WASM with BEGIN CONCURRENT and WAL2 support. At startup, orez patches `@rocicorp/zero-sqlite3` to load bedrock-sqlite instead of the native C addon. Both databases run as WASM — nothing to compile, nothing platform-specific. Just `bun install` and go.
 
 ### Auto heap sizing
 
-The CLI detects system memory and re-spawns the process with `--max-old-space-size` set to ~50% of available RAM (minimum 4GB). PGlite WASM needs substantial heap for large datasets and restores — this prevents cryptic V8 OOM crashes without requiring manual tuning.
+The CLI detects system memory on startup and re-spawns the process with `--max-old-space-size` set to ~50% of available RAM (minimum 4GB). PGlite WASM needs substantial heap for large datasets and restores — this prevents cryptic V8 OOM crashes without requiring manual tuning.
 
 ## Environment variables
 
