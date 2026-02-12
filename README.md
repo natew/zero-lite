@@ -1,5 +1,7 @@
 <p align="center">
-  <img src="orez.png" alt="orez" width="320" />
+  <picture>
+    <img src="orez.png" alt="orez" width="9611" height="2395" style="max-width: 100%; height: auto;" />
+  </picture>
 </p>
 
 [Zero](https://zero.rocicorp.dev) is amazing, but setting it up alongside Postgres requires effort, native dependencies, and oftentimes Docker. 
