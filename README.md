@@ -1,6 +1,6 @@
 # orez
 
-[Zero](https://zero.rocicorp.dev) is amazing, but setting it up alongside Postgres requires effort, native dependencies, and oftentimes Docker. 
+[Zero](https://zero.rocicorp.dev) is amazing, but setting it up alongside Postgres requires effort, native dependencies, and oftentimes Docker.
 
 orez makes [PGlite](https://pglite.dev) work with Zero with a few things - a proxy that adds logical replication to PGLite, and then a bunch of iterations figuring out setup and setting that make them both happy together. To remove all native dependences, orez also ships a custom WASM fork of the same SQLite [bedrock branch](https://sqlite.org/src/timeline?t=begin-concurrent) that Zero uses. Inlcudes a CLI, programmatic API, and Vite plugin.
 
@@ -8,7 +8,7 @@ orez makes [PGlite](https://pglite.dev) work with Zero with a few things - a pro
 bunx orez
 ```
 
-orez auto-configures Node heap size based on system memory, adaptively polls for replication changes (~500x faster catch-up after large restores), purges consumed WAL changes to prevent WASM OOM, and auto-tracks tables created at runtime via DDL event triggers. Includes `pg_dump` and `pg_restore` subcommands that can restore production Postgres dumps directly into PGlite — handling COPY→INSERT conversion, unsupported extension filtering, idempotent DDL rewriting, and WASM memory management automatically. It uses [pgsql-parser](https://www.npmjs.com/package/pgsql-parser) (the real PostgreSQL C parser, compiled to WASM) for SQL analysis. Comes with PGlite extensions `pgvector` and `pg_trgm` enabled by default. 
+orez auto-configures Node heap size based on system memory, adaptively polls for replication changes (~500x faster catch-up after large restores), purges consumed WAL changes to prevent WASM OOM, and auto-tracks tables created at runtime via DDL event triggers. Includes `pg_dump` and `pg_restore` subcommands that can restore production Postgres dumps directly into PGlite — handling COPY→INSERT conversion, unsupported extension filtering, idempotent DDL rewriting, and WASM memory management automatically. It uses [pgsql-parser](https://www.npmjs.com/package/pgsql-parser) (the real PostgreSQL C parser, compiled to WASM) for SQL analysis. Comes with PGlite extensions `pgvector` and `pg_trgm` enabled by default.
 
 ## CLI
 
