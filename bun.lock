@@ -10,6 +10,7 @@
         "@rocicorp/zero": ">=0.1.0",
         "bedrock-sqlite": "workspace:*",
         "citty": "^0.2.0",
+        "pg-gateway": "0.3.0-beta.4",
         "pgsql-parser": "^17.9.11",
         "postgres": "^3.4.5",
       },
@@ -31,7 +32,7 @@
     },
     "sqlite-wasm": {
       "name": "bedrock-sqlite",
-      "version": "0.0.40",
+      "version": "0.0.41",
       "devDependencies": {
         "typescript": "^5.7.0",
         "vitest": "^3.0.0",
@@ -776,6 +777,8 @@
     "pathval": ["pathval@2.0.1", "", {}, "sha512-//nshmD55c46FuFw26xV/xFAaB5HF9Xdap7HJBBnrKdAd6/GxDBaNA1870O79+9ueg61cZLSVc+OaFlfmObYVQ=="],
 
     "pg-format": ["pg-format-fix@1.0.5", "", {}, "sha512-HcXVy9Zk4kn87P0+U9XSxGtenNyknbPB87NreixSBk0lYJy89u+d/zQbS+f/aTTxABQ/B6FH1KdBB5EsGzRS2w=="],
+
+    "pg-gateway": ["pg-gateway@0.3.0-beta.4", "", {}, "sha512-CTjsM7Z+0Nx2/dyZ6r8zRsc3f9FScoD5UAOlfUx1Fdv/JOIWvRbF7gou6l6vP+uypXQVoYPgw8xZDXgMGvBa4Q=="],
 
     "pg-int8": ["pg-int8@1.0.1", "", {}, "sha512-WCtabS6t3c8SkpDBUlb1kjOs7l66xsGdKpIPZsg4wR+B3+u9UAum2odSsF9tnvxg80h4ZxLWMy4pRjOsFIqQpw=="],
 

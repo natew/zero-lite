@@ -10,7 +10,6 @@ import { log } from '../log.js'
 import {
   getChangesSince,
   getCurrentWatermark,
-  purgeConsumedChanges,
   installTriggersOnShardTables,
   type ChangeRecord,
 } from './change-tracker.js'
@@ -31,9 +30,6 @@ import {
 
 import type { Mutex } from '../mutex.js'
 import type { PGlite } from '@electric-sql/pglite'
-
-// track concurrent replication handlers to detect reconnect-purge race
-let activeHandlerCount = 0
 
 export interface ReplicationWriter {
   write(data: Uint8Array): void
@@ -265,11 +261,6 @@ export async function handleStartReplication(
   db: PGlite,
   mutex: Mutex
 ): Promise<void> {
-  activeHandlerCount++
-  const handlerId = activeHandlerCount
-  console.info(
-    `[orez-repl#${handlerId}] START_REPLICATION (active handlers: ${activeHandlerCount})`
-  )
   log.debug.proxy('replication: entering streaming mode')
 
   // send CopyBothResponse to enter streaming mode
@@ -351,7 +342,7 @@ export async function handleStartReplication(
     for (const schema of relevantSchemas) {
       if (schema === 'public') continue
       const shardTables = await db.query<{ tablename: string }>(
-        `SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename = 'clients'`,
+        `SELECT tablename FROM pg_tables WHERE schemaname = $1`,
         [schema]
       )
       for (const { tablename } of shardTables.rows) {
@@ -461,23 +452,13 @@ export async function handleStartReplication(
     mutex.release()
   }
 
-  console.info(
-    `[orez-repl#${handlerId}] setup complete, starting poll (lastWatermark=${lastWatermark})`
-  )
-
   // track which tables we've sent RELATION messages for
   const sentRelations = new Set<string>()
   let txCounter = 1
 
   // polling + notification loop
-  // adaptive: poll fast when catching up, slow when idle
-  const pollIntervalIdle = 500
-  const pollIntervalCatchUp = 20
-  const batchSize = 2000
-  const purgeEveryN = 10
+  const pollInterval = 500
   let running = true
-  let pollsSincePurge = 0
-  let lastIdleLog = 0
 
   const poll = async () => {
     while (running) {
@@ -486,35 +467,12 @@ export async function handleStartReplication(
         await mutex.acquire()
         let changes: Awaited<ReturnType<typeof getChangesSince>>
         try {
-          changes = await getChangesSince(db, lastWatermark, batchSize)
+          changes = await getChangesSince(db, lastWatermark, 100)
         } finally {
           mutex.release()
         }
 
         if (changes.length > 0) {
-          // filter out shard tables that zero-cache doesn't expect.
-          // only `clients` is needed (for .server promise resolution).
-          // other shard tables (replicas, mutations) crash zero-cache
-          // with "Unknown table" in change-processor.
-          const batchEnd = changes[changes.length - 1].watermark
-          changes = changes.filter((c) => {
-            const dot = c.table_name.indexOf('.')
-            if (dot === -1) return true
-            const schema = c.table_name.substring(0, dot)
-            if (schema === 'public') return true
-            const table = c.table_name.substring(dot + 1)
-            return table === 'clients'
-          })
-
-          if (changes.length === 0) {
-            lastWatermark = batchEnd
-            continue
-          }
-
-          const tables = [...new Set(changes.map((c) => c.table_name))].join(',')
-          console.info(
-            `[orez-repl#${handlerId}] found ${changes.length} changes [${tables}] (wm ${lastWatermark}→${changes[changes.length - 1].watermark}, type=${typeof changes[0].watermark})`
-          )
           await streamChanges(
             changes,
             writer,
@@ -524,42 +482,14 @@ export async function handleStartReplication(
             excludedColumns,
             columnTypeOids
           )
-          lastWatermark = batchEnd
-
-          // purge consumed changes periodically to free wasm memory
-          pollsSincePurge++
-          if (pollsSincePurge >= purgeEveryN) {
-            pollsSincePurge = 0
-            await mutex.acquire()
-            try {
-              const purged = await purgeConsumedChanges(db, lastWatermark)
-              if (purged > 0) {
-                console.info(
-                  `[orez-repl#${handlerId}] purged ${purged} changes (wm<=${lastWatermark})`
-                )
-              }
-            } finally {
-              mutex.release()
-            }
-          }
-        } else {
-          // throttled idle logging (every 10s)
-          const now = Date.now()
-          if (now - lastIdleLog > 10000) {
-            lastIdleLog = now
-            console.info(
-              `[orez-repl#${handlerId}] idle (lastWatermark=${lastWatermark}, type=${typeof lastWatermark})`
-            )
-          }
+          lastWatermark = changes[changes.length - 1].watermark
         }
 
         // send keepalive
         const ts = nowMicros()
         writer.write(encodeKeepalive(currentLsn, ts, false))
 
-        // if we got a full batch, there's likely more - poll fast
-        const delay = changes.length >= batchSize ? pollIntervalCatchUp : pollIntervalIdle
-        await new Promise((resolve) => setTimeout(resolve, delay))
+        await new Promise((resolve) => setTimeout(resolve, pollInterval))
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
         log.debug.proxy(`replication poll error: ${msg}`)
@@ -574,10 +504,7 @@ export async function handleStartReplication(
 
   log.debug.proxy('replication: starting poll loop')
   await poll()
-  activeHandlerCount--
-  console.info(
-    `[orez-repl#${handlerId}] poll loop exited (remaining handlers: ${activeHandlerCount})`
-  )
+  log.debug.proxy('replication: poll loop exited')
 }
 
 async function streamChanges(

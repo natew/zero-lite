@@ -90,7 +90,6 @@ const pgDumpCommand = defineCommand({
       } else {
         process.stdout.write(sql)
       }
-      process.exit(0)
     } catch (err: any) {
       if (err?.message?.includes('lock')) {
         console.error(
@@ -153,13 +152,6 @@ function shouldSkipStatement(stmt: string): boolean {
       const extName = node.object?.String?.sval
       if (extName && UNSUPPORTED_EXTENSIONS.has(extName)) return true
     }
-
-    // skip CREATE/ALTER/DROP PUBLICATION — pglite doesn't support wal_level=logical
-    // internally, so CREATE PUBLICATION errors and can roll back the transaction
-    // (orez handles replication via its own change tracker, not publications)
-    if (nodeType === 'CreatePublicationStmt' || nodeType === 'AlterPublicationStmt')
-      return true
-    if (nodeType === 'DropStmt' && node.removeType === 'OBJECT_PUBLICATION') return true
   }
 
   return false
@@ -271,22 +263,9 @@ export async function execDumpFile(
     const colList =
       copyTarget.columns.length > 0 ? ` (${copyTarget.columns.join(', ')})` : ''
     const insert = `INSERT INTO ${copyTarget.table}${colList} VALUES ${copyRows.join(', ')}`
-    try {
-      await db.exec(insert)
-      executed += copyRows.length
-      batchCount += copyRows.length
-    } catch (err: any) {
-      log.orez(`warning: ${err?.message?.split('\n')[0] ?? err}`)
-      skipped += copyRows.length
-      // transaction is aborted, rollback and start fresh
-      if (inBatch) {
-        try {
-          await db.exec('ROLLBACK')
-        } catch {}
-        inBatch = false
-        batchCount = 0
-      }
-    }
+    await db.exec(insert)
+    executed += copyRows.length
+    batchCount += copyRows.length
     copyRows = []
     copyRowsBytes = 0
   }
@@ -479,37 +458,6 @@ export async function execDumpFile(
   return { executed, skipped }
 }
 
-// after restore, drop triggers whose backing functions no longer exist.
-// this happens when a filtered dump includes triggers on public-schema tables
-// that reference functions from excluded schemas (e.g. startchat.update_count()).
-// the triggers survive TOC filtering because they're associated with public tables.
-async function cleanupBrokenTriggers(db: { exec: (q: string) => Promise<unknown> }) {
-  try {
-    const result = (await db.exec(`
-      SELECT tgname, relname, nspname, proname, pronamespace
-      FROM pg_trigger t
-      JOIN pg_class c ON c.oid = t.tgrelid
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-      LEFT JOIN pg_proc p ON p.oid = t.tgfoid
-      WHERE NOT t.tgisinternal
-        AND n.nspname = 'public'
-        AND (p.oid IS NULL OR p.pronamespace != n.oid)
-    `)) as any
-
-    const rows = result?.rows || result?.[0]?.rows || []
-    for (const row of rows) {
-      const trigger = row.tgname
-      const table = row.relname
-      try {
-        await db.exec(`DROP TRIGGER IF EXISTS "${trigger}" ON "public"."${table}"`)
-        log.orez(`dropped broken trigger "${trigger}" on "${table}"`)
-      } catch {}
-    }
-  } catch {
-    // best-effort cleanup
-  }
-}
-
 // try restoring via wire protocol (postgres running on given port)
 // returns true if connected and restored, false if connection unavailable
 async function tryWireRestore(opts: {
@@ -548,8 +496,6 @@ async function tryWireRestore(opts: {
 
     const db = { exec: (query: string) => sql.unsafe(query) as Promise<unknown> }
     const { executed, skipped } = await execDumpFile(db, opts.sqlFile)
-    await cleanupBrokenTriggers(db)
-    await db.exec('SET search_path TO public')
     log.orez(
       `restored ${opts.sqlFile} via wire protocol (${executed} statements, ${skipped} skipped)`
     )
@@ -587,8 +533,6 @@ async function directRestore(opts: {
     }
 
     const { executed, skipped } = await execDumpFile(db, opts.sqlFile)
-    await cleanupBrokenTriggers(db)
-    await db.exec('SET search_path TO public')
     log.orez(
       `restored ${opts.sqlFile} into ${dataPath} (${executed} statements, ${skipped} skipped)`
     )
@@ -667,7 +611,7 @@ const pgRestoreCommand = defineCommand({
           clean: args.clean,
           sqlFile,
         })
-        if (restored) process.exit(0)
+        if (restored) return
         log.orez('wire protocol unavailable, falling back to direct PGlite')
       } catch (err: any) {
         // connected but restore failed — report error, don't fall back
@@ -681,7 +625,6 @@ const pgRestoreCommand = defineCommand({
       clean: args.clean,
       sqlFile,
     })
-    process.exit(0)
   },
 })
 
@@ -748,12 +691,7 @@ const main = defineCommand({
     'disable-wasm-sqlite': {
       type: 'boolean',
       description: 'use native @rocicorp/zero-sqlite3 instead of wasm bedrock-sqlite',
-      default: false,
-    },
-    'log-env': {
-      type: 'boolean',
-      description: 'log ZERO_* and related environment variables on startup',
-      default: false,
+      default: true,
     },
     'on-db-ready': {
       type: 'string',
@@ -765,21 +703,6 @@ const main = defineCommand({
       description: 'command to run once all services are healthy',
       default: '',
     },
-    admin: {
-      type: 'boolean',
-      description: 'start admin web ui',
-      default: false,
-    },
-    'admin-port': {
-      type: 'string',
-      description: 'admin ui port (default: auto)',
-      default: '0',
-    },
-    'admin-logs': {
-      type: 'boolean',
-      description: 'write logs to .orez/logs/ (default: true when --admin)',
-      default: true,
-    },
   },
   subCommands: {
     s3: s3Command,
@@ -787,25 +710,19 @@ const main = defineCommand({
     pg_restore: pgRestoreCommand,
   },
   async run({ args }) {
-    const startTime = Date.now()
-    const { config, stop, logStore, zeroEnv, actions, httpLogStore } =
-      await startZeroLite({
-        pgPort: Number(args['pg-port']),
-        zeroPort: Number(args['zero-port']),
-        dataDir: args['data-dir'],
-        migrationsDir: args.migrations,
-        seedFile: args.seed,
-        pgUser: args['pg-user'],
-        pgPassword: args['pg-password'],
-        skipZeroCache: args['skip-zero-cache'],
-        disableWasmSqlite: args['disable-wasm-sqlite'],
-        logLevel: (args['log-level'] as 'error' | 'warn' | 'info' | 'debug') || undefined,
-        logEnv: args['log-env'],
-        onDbReady: args['on-db-ready'],
-        admin: args.admin,
-        adminPort: Number(args['admin-port']),
-        adminLogs: args['admin-logs'],
-      })
+    const { config, stop } = await startZeroLite({
+      pgPort: Number(args['pg-port']),
+      zeroPort: Number(args['zero-port']),
+      dataDir: args['data-dir'],
+      migrationsDir: args.migrations,
+      seedFile: args.seed,
+      pgUser: args['pg-user'],
+      pgPassword: args['pg-password'],
+      skipZeroCache: args['skip-zero-cache'],
+      disableWasmSqlite: args['disable-wasm-sqlite'],
+      logLevel: (args['log-level'] as 'error' | 'warn' | 'info' | 'debug') || undefined,
+      onDbReady: args['on-db-ready'],
+    })
 
     let s3Server: import('node:http').Server | null = null
     if (args.s3) {
@@ -814,27 +731,6 @@ const main = defineCommand({
         port: Number(args['s3-port']),
         dataDir: args['data-dir'],
       })
-    }
-
-    let adminServer: import('node:http').Server | null = null
-    if (args.admin && logStore) {
-      const { findPort } = await import('./port.js')
-      const adminPort = Number(args['admin-port']) || config.zeroPort + 2
-      const resolvedPort = await findPort(adminPort)
-      const { startAdminServer } = await import('./admin/server.js')
-      adminServer = await startAdminServer({
-        port: resolvedPort,
-        logStore,
-        config,
-        zeroEnv,
-        actions,
-        startTime,
-        httpLog: httpLogStore || undefined,
-      })
-      log.orez(`admin: http://127.0.0.1:${resolvedPort}`)
-      if (args['admin-logs']) {
-        log.orez(`logs: ${resolve(args['data-dir'], 'logs', 'orez.log')}`)
-      }
     }
 
     log.orez('ready')
@@ -864,13 +760,11 @@ const main = defineCommand({
     }
 
     process.on('SIGINT', async () => {
-      adminServer?.close()
       s3Server?.close()
       await stop()
       process.exit(0)
     })
     process.on('SIGTERM', async () => {
-      adminServer?.close()
       s3Server?.close()
       await stop()
       process.exit(0)

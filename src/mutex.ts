@@ -1,8 +1,4 @@
-// simple mutex for serializing pglite access.
-// uses setImmediate/setTimeout between releases to prevent event loop
-// starvation when multiple connections queue up — without this, releasing
-// the mutex resolves the next waiter as a microtask, which causes a chain
-// of synchronous pglite executions that blocks all I/O processing.
+// simple mutex for serializing pglite access
 export class Mutex {
   private locked = false
   private queue: Array<() => void> = []
@@ -20,13 +16,7 @@ export class Mutex {
   release(): void {
     const next = this.queue.shift()
     if (next) {
-      // yield to event loop so I/O events (socket reads/writes) are processed
-      // before the next waiter acquires the mutex
-      if (typeof setImmediate !== 'undefined') {
-        setImmediate(next)
-      } else {
-        setTimeout(next, 0)
-      }
+      next()
     } else {
       this.locked = false
     }

@@ -16,7 +16,7 @@ export interface PGliteInstances {
 }
 
 // create a single pglite instance with given dataDir suffix
-export async function createInstance(
+async function createInstance(
   config: ZeroLiteConfig,
   name: string,
   withExtensions: boolean
@@ -133,15 +133,8 @@ export async function runMigrations(db: PGlite, config: ZeroLiteConfig): Promise
       continue
     }
 
-    const filePath = join(migrationsDir, file)
-    if (!existsSync(filePath)) {
-      // .ts-only custom migrations are handled by the app's own migration runner
-      log.debug.orez(`skipping migration (no .sql file): ${name}`)
-      continue
-    }
-
     log.debug.orez(`applying migration: ${name}`)
-    const sql = readFileSync(filePath, 'utf-8')
+    const sql = readFileSync(join(migrationsDir, file), 'utf-8')
 
     // split by drizzle's statement-breakpoint marker
     const statements = sql

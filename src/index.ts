@@ -7,28 +7,17 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { totalmem } from 'node:os'
 import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 import { getConfig, getConnectionString } from './config.js'
-import { log, port, setLogLevel, addLogListener } from './log.js'
+import { log, port, setLogLevel } from './log.js'
 import { startPgProxy } from './pg-proxy.js'
-import { createInstance, createPGliteInstances, runMigrations } from './pglite-manager.js'
+import { createPGliteInstances, runMigrations } from './pglite-manager.js'
 import { findPort } from './port.js'
 import { installChangeTracking } from './replication/change-tracker.js'
 
-import type { HttpLogStore } from './admin/http-proxy.js'
-import type { LogStore } from './admin/log-store.js'
 import type { ZeroLiteConfig } from './config.js'
 import type { PGlite } from '@electric-sql/pglite'
 
@@ -51,25 +40,6 @@ function resolvePackage(pkg: string): string {
 export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
   const config = getConfig(overrides)
   setLogLevel(config.logLevel)
-
-  // when admin ui enabled, create log store and capture all log output
-  const SOURCE_MAP: Record<string, string> = {
-    orez: 'orez',
-    pglite: 'pglite',
-    'pg-proxy': 'proxy',
-    zero: 'zero',
-    'zero-cache': 'zero',
-    'orez/s3': 's3',
-  }
-  let logStore: LogStore | null = null
-  let removeLogListener: (() => void) | null = null
-  if (config.admin) {
-    const { createLogStore } = await import('./admin/log-store.js')
-    logStore = createLogStore(config.dataDir, config.adminLogs)
-    removeLogListener = addLogListener((source, level, msg) => {
-      logStore!.push(SOURCE_MAP[source] || source, level, msg)
-    })
-  }
 
   // find available ports
   const pgPort = await findPort(config.pgPort)
@@ -101,7 +71,7 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
   // start tcp proxy (routes connections to correct instance by database name)
   const pgServer = await startPgProxy(instances, config)
 
-  log.pglite(`postgres up ${port(pgPort, 'green')}`)
+  log.orez(`db up ${port(pgPort, 'green')}`)
   if (migrationsApplied > 0)
     log.orez(
       `${migrationsApplied} migration${migrationsApplied === 1 ? '' : 's'} applied`
@@ -145,154 +115,21 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
     await installChangeTracking(db)
   }
 
-  // run beforeZero callback (e.g. create tables before zero-cache starts)
-  if (config.beforeZero) {
-    log.debug.orez('running beforeZero callback')
-    await config.beforeZero(db)
-    // re-install change tracking on tables created by the callback
-    await installChangeTracking(db)
-  }
+  // clean up stale sqlite replica from previous runs
+  cleanupStaleReplica(config)
 
-  // clean up stale lock files from previous crash (keep replica for fast restart)
-  cleanupStaleLockFiles(config)
-
-  // http proxy for admin traffic logging
-  let httpLogStore: HttpLogStore | null = null
-  let httpProxyServer: import('node:http').Server | null = null
-  let zeroInternalPort = zeroPort
-  if (config.admin && !config.skipZeroCache) {
-    const { createHttpLogStore } = await import('./admin/http-proxy.js')
-    httpLogStore = createHttpLogStore()
-    zeroInternalPort = await findPort(zeroPort + 100)
-  }
-
-  // start zero-cache with auto-recovery for stale change db
+  // start zero-cache
   let zeroCacheProcess: ChildProcess | null = null
-  let zeroEnv: Record<string, string> = {}
-  const cdbResets = { count: 0, lastReset: 0 }
-  const MAX_CDB_RESETS = 10
-  const MIN_RESET_INTERVAL_MS = 60_000
-
   if (!config.skipZeroCache) {
-    let currentResult = await startZeroCache(config, zeroInternalPort)
-    zeroCacheProcess = currentResult.child
-    zeroEnv = currentResult.env
-
-    // watch for stale changeLog crashes and auto-recover
-    const attachCdbRecovery = (result: typeof currentResult) => {
-      result.child.on('exit', async (code) => {
-        if (code === 0 || code === null) return
-        if (!result.stderrBuf.includes('changeLog_pkey')) return
-
-        const now = Date.now()
-        if (cdbResets.count >= MAX_CDB_RESETS) {
-          log.zero('change db reset limit reached, not retrying')
-          return
-        }
-        const elapsed = now - cdbResets.lastReset
-        if (elapsed < MIN_RESET_INTERVAL_MS) {
-          log.zero(
-            `change db reset too soon (${Math.round(elapsed / 1000)}s ago), not retrying`
-          )
-          return
-        }
-
-        cdbResets.count++
-        cdbResets.lastReset = now
-        log.zero(
-          `stale change db detected, resetting (${cdbResets.count}/${MAX_CDB_RESETS})`
-        )
-
-        try {
-          await instances.cdb.close()
-          const cdbPath = resolve(config.dataDir, 'pgdata-cdb')
-          rmSync(cdbPath, { recursive: true, force: true })
-          instances.cdb = await createInstance(config, 'cdb', false)
-
-          currentResult = await startZeroCache(config, zeroInternalPort)
-          zeroCacheProcess = currentResult.child
-          attachCdbRecovery(currentResult)
-          await waitForZeroCache(config, undefined, zeroInternalPort)
-          log.zero(`recovered, ready ${port(config.zeroPort, 'magenta')}`)
-        } catch (err) {
-          log.zero(`recovery failed: ${err}`)
-        }
-      })
-    }
-
-    attachCdbRecovery(currentResult)
-    await waitForZeroCache(config, undefined, zeroInternalPort)
+    zeroCacheProcess = await startZeroCache(config)
+    await waitForZeroCache(config)
     log.zero(`ready ${port(config.zeroPort, 'magenta')}`)
-
-    // start http proxy for admin traffic logging
-    if (httpLogStore) {
-      const { startHttpProxy } = await import('./admin/http-proxy.js')
-      httpProxyServer = await startHttpProxy({
-        listenPort: zeroPort,
-        targetPort: zeroInternalPort,
-        httpLog: httpLogStore,
-      })
-    }
   } else {
     log.orez('skip zero-cache')
   }
 
-  // admin action handlers
-  const actions = {
-    restartZero: config.skipZeroCache
-      ? undefined
-      : async () => {
-          if (zeroCacheProcess && !zeroCacheProcess.killed) {
-            zeroCacheProcess.kill('SIGTERM')
-            await new Promise<void>((r) => {
-              const t = setTimeout(() => {
-                zeroCacheProcess?.kill('SIGKILL')
-                r()
-              }, 3000)
-              zeroCacheProcess!.on('exit', () => {
-                clearTimeout(t)
-                r()
-              })
-            })
-          }
-          const zc = await startZeroCache(config, zeroInternalPort)
-          zeroCacheProcess = zc.child
-          await waitForZeroCache(config, undefined, zeroInternalPort)
-          log.zero(`restarted ${port(config.zeroPort, 'magenta')}`)
-        },
-    resetZero: config.skipZeroCache
-      ? undefined
-      : async () => {
-          if (zeroCacheProcess && !zeroCacheProcess.killed) {
-            zeroCacheProcess.kill('SIGTERM')
-            await new Promise<void>((r) => {
-              const t = setTimeout(() => {
-                zeroCacheProcess?.kill('SIGKILL')
-                r()
-              }, 3000)
-              zeroCacheProcess!.on('exit', () => {
-                clearTimeout(t)
-                r()
-              })
-            })
-          }
-          const replicaPath = resolve(config.dataDir, 'zero-replica.db')
-          for (const suffix of ['', '-wal', '-shm', '-wal2']) {
-            try {
-              if (existsSync(replicaPath + suffix)) unlinkSync(replicaPath + suffix)
-            } catch {}
-          }
-          const zc = await startZeroCache(config, zeroInternalPort)
-          zeroCacheProcess = zc.child
-          await waitForZeroCache(config, undefined, zeroInternalPort)
-          log.zero(`reset and restarted ${port(config.zeroPort, 'magenta')}`)
-        },
-  }
-
   const stop = async () => {
     log.debug.orez('shutting down')
-    removeLogListener?.()
-    httpProxyServer?.close()
     if (zeroCacheProcess && !zeroCacheProcess.killed) {
       zeroCacheProcess.kill('SIGTERM')
       // wait up to 3s for graceful exit, then force kill
@@ -318,32 +155,20 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
     log.debug.orez('stopped')
   }
 
-  return {
-    config,
-    stop,
-    db,
-    instances,
-    pgPort: config.pgPort,
-    zeroPort: config.zeroPort,
-    logStore,
-    zeroEnv,
-    actions,
-    httpLogStore,
-  }
+  return { config, stop, db, instances, pgPort: config.pgPort, zeroPort: config.zeroPort }
 }
 
-function cleanupStaleLockFiles(config: ZeroLiteConfig): void {
+function cleanupStaleReplica(config: ZeroLiteConfig): void {
   const replicaPath = resolve(config.dataDir, 'zero-replica.db')
-  // only delete lock/wal files that prevent zero-cache from starting after a crash.
-  // keep the replica db itself — zero-cache catches up via replication, which is
-  // nearly instant vs a full initial sync (COPY of all tables). if the replica is
-  // too stale, ZERO_AUTO_RESET=true makes zero-cache wipe and resync automatically.
-  for (const suffix of ['-wal', '-shm', '-wal2']) {
+  // delete replica + all lock/wal files so zero-cache does a fresh sync
+  // the replica is just a cache of pglite data, safe to recreate
+  for (const suffix of ['', '-wal', '-shm', '-wal2']) {
     const file = replicaPath + suffix
     try {
       if (existsSync(file)) {
         unlinkSync(file)
-        log.debug.orez(`cleaned up stale ${suffix} file`)
+        if (suffix) log.debug.orez(`cleaned up stale ${suffix} file`)
+        else log.debug.orez('cleaned up stale replica (will re-sync)')
       }
     } catch {
       // ignore
@@ -383,35 +208,71 @@ async function seedIfNeeded(db: PGlite, config: ZeroLiteConfig): Promise<void> {
   log.orez('seeded')
 }
 
-// write esm loader hooks to tmpdir that intercept @rocicorp/zero-sqlite3
-// and redirect to bedrock-sqlite wasm. templates live in src/shim/.
-// returns the path to register.mjs (passed via --import in NODE_OPTIONS).
+// create a fake @rocicorp/zero-sqlite3 package in tmpdir that redirects to
+// bedrock-sqlite (wasm). uses NODE_PATH to make node resolve our shim first —
+// no require hooks, no Module._resolveFilename monkey-patching, no .cjs files
+// in the package (which all break vite).
 function writeSqliteShim(): string {
   const tmp = process.env.TMPDIR || process.env.TEMP || '/tmp'
-  const dir = resolve(tmp, 'orez-sqlite')
+  const dir = resolve(tmp, 'orez-sqlite', 'node_modules', '@rocicorp', 'zero-sqlite3')
   mkdirSync(dir, { recursive: true })
 
   const bedrockEntry = resolvePackage('bedrock-sqlite')
-  const shimDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'shim')
 
-  const hooksPath = resolve(dir, 'hooks.mjs')
-  const hooksTemplate = readFileSync(resolve(shimDir, 'hooks.mjs'), 'utf-8')
-  writeFileSync(hooksPath, hooksTemplate.replace(/__BEDROCK_PATH__/g, bedrockEntry))
-
-  const registerPath = resolve(dir, 'register.mjs')
-  const registerTemplate = readFileSync(resolve(shimDir, 'register.mjs'), 'utf-8')
   writeFileSync(
-    registerPath,
-    registerTemplate.replace(/__HOOKS_URL__/g, `file://${hooksPath}`)
+    resolve(dir, 'package.json'),
+    '{"name":"@rocicorp/zero-sqlite3","main":"./index.js"}\n'
   )
 
-  return registerPath
+  writeFileSync(
+    resolve(dir, 'index.js'),
+    `'use strict';
+var mod = require('${bedrockEntry}');
+var OrigDatabase = mod.Database;
+var SqliteError = mod.SqliteError;
+function Database() {
+  var db = new OrigDatabase(...arguments);
+  try {
+    db.pragma('journal_mode = delete');
+    db.pragma('busy_timeout = 30000');
+    db.pragma('synchronous = normal');
+  } catch(e) {}
+  return db;
+}
+Database.prototype = OrigDatabase.prototype;
+Database.prototype.constructor = Database;
+Object.keys(OrigDatabase).forEach(function(k) { Database[k] = OrigDatabase[k]; });
+Database.prototype.unsafeMode = function() { return this; };
+if (!Database.prototype.defaultSafeIntegers) Database.prototype.defaultSafeIntegers = function() { return this; };
+if (!Database.prototype.serialize) Database.prototype.serialize = function() { throw new Error('not supported in wasm'); };
+if (!Database.prototype.backup) Database.prototype.backup = function() { throw new Error('not supported in wasm'); };
+var tmpDb = new OrigDatabase(':memory:');
+var tmpStmt = tmpDb.prepare('SELECT 1');
+var SP = Object.getPrototypeOf(tmpStmt);
+if (!SP.safeIntegers) SP.safeIntegers = function() { return this; };
+SP.scanStatus = function() { return undefined; };
+SP.scanStatusV2 = function() { return []; };
+SP.scanStatusReset = function() {};
+tmpDb.close();
+Database.SQLITE_SCANSTAT_NLOOP = 0;
+Database.SQLITE_SCANSTAT_NVISIT = 1;
+Database.SQLITE_SCANSTAT_EST = 2;
+Database.SQLITE_SCANSTAT_NAME = 3;
+Database.SQLITE_SCANSTAT_EXPLAIN = 4;
+Database.SQLITE_SCANSTAT_SELECTID = 5;
+Database.SQLITE_SCANSTAT_PARENTID = 6;
+Database.SQLITE_SCANSTAT_NCYCLE = 7;
+Database.SQLITE_SCANSTAT_COMPLEX = 8;
+module.exports = Database;
+module.exports.SqliteError = SqliteError;
+`
+  )
+
+  // return the node_modules root so it can be prepended to NODE_PATH
+  return resolve(tmp, 'orez-sqlite', 'node_modules')
 }
 
-async function startZeroCache(
-  config: ZeroLiteConfig,
-  portOverride?: number
-): Promise<{ child: ChildProcess; env: Record<string, string>; stderrBuf: string }> {
+async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
   // resolve @rocicorp/zero entry for finding zero-cache modules
   const zeroEntry = resolvePackage('@rocicorp/zero')
 
@@ -430,20 +291,12 @@ async function startZeroCache(
   // defaults that can be overridden by user env
   const defaults: Record<string, string> = {
     NODE_ENV: 'development',
-    ZERO_LOG_LEVEL: 'info',
+    ZERO_LOG_LEVEL: config.logLevel,
     ZERO_NUM_SYNC_WORKERS: '1',
     // disable query planner — it relies on scanStatus which causes infinite
     // loops with wasm sqlite and has caused freezes with native too.
     // planner is an optimization, not required for correctness.
     ZERO_ENABLE_QUERY_PLANNER: 'false',
-    // work around postgres.js bug: concurrent COPY TO STDOUT on a reused
-    // connection causes .readable() to hang indefinitely. setting workers
-    // high ensures each table gets its own connection (1 COPY per conn).
-    // zero-cache already applies this workaround on windows (initial-sync.js).
-    ZERO_INITIAL_SYNC_TABLE_COPY_WORKERS: '999',
-    // auto-reset on replication errors (e.g. after pg_restore) instead of
-    // crashing — zero-cache wipes its replica and resyncs from scratch.
-    ZERO_AUTO_RESET: 'true',
   }
 
   const env: Record<string, string> = {
@@ -456,7 +309,7 @@ async function startZeroCache(
     ZERO_CVR_DB: cvrUrl,
     ZERO_CHANGE_DB: cdbUrl,
     ZERO_REPLICA_FILE: resolve(config.dataDir, 'zero-replica.db'),
-    ZERO_PORT: String(portOverride || config.zeroPort),
+    ZERO_PORT: String(config.zeroPort),
   }
 
   const zeroCacheBin = resolve(zeroEntry, '..', 'cli.js')
@@ -464,135 +317,65 @@ async function startZeroCache(
     throw new Error('zero-cache cli.js not found. install @rocicorp/zero')
   }
 
-  // calculate heap size: ~25% of system memory, min 4gb
-  const memMB = Math.round(totalmem() / 1024 / 1024)
-  const heapMB = Math.max(4096, Math.round(memMB * 0.25))
-  const existing = process.env.NODE_OPTIONS || ''
-
-  // wasm sqlite: write shim + ESM loader to tmpdir, pass --import to intercept
-  // @rocicorp/zero-sqlite3 resolution with our bedrock-sqlite wasm build
+  // wasm sqlite: create a fake @rocicorp/zero-sqlite3 in tmpdir and prepend
+  // to NODE_PATH so node resolves our shim first. no require hooks, no
+  // Module._resolveFilename monkey-patching (which conflicts with vite).
   if (!config.disableWasmSqlite) {
-    const registerPath = writeSqliteShim()
-    const registerUrl = `file://${registerPath}`
-    env.NODE_OPTIONS =
-      `--import ${registerUrl} --max-old-space-size=${heapMB} ${existing}`.trim()
-  } else {
-    env.NODE_OPTIONS = `--max-old-space-size=${heapMB} ${existing}`.trim()
+    const shimNodeModules = writeSqliteShim()
+    const existingNodePath = process.env.NODE_PATH || ''
+    env.NODE_PATH = existingNodePath
+      ? `${shimNodeModules}:${existingNodePath}`
+      : shimNodeModules
   }
 
-  // log env vars if --log-env was passed
-  if (config.logEnv) {
-    const zeroVars = Object.entries(env)
-      .filter(([key]) => key.startsWith('ZERO_') || key === 'NODE_ENV')
-      .sort(([a], [b]) => a.localeCompare(b))
-    log.orez('zero-cache env:')
-    for (const [key, value] of zeroVars) {
-      log.orez(`  ${key}=${value}`)
-    }
-  }
+  const nodeOptions = !config.disableWasmSqlite
+    ? `--max-old-space-size=16384 ${process.env.NODE_OPTIONS || ''}`
+    : process.env.NODE_OPTIONS || ''
+  if (nodeOptions.trim()) env.NODE_OPTIONS = nodeOptions.trim()
 
   const child = spawn(zeroCacheBin, [], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
-  // zero-cache uses structured logging when piped (not a tty).
-  // multiline format: timestamp + "[" on one line, context lines, "] message" on another.
-  // single-line format: timestamp + [ context ] message, or timestamp + key=val,... message
-  // we buffer multiline blocks and extract just the message.
-  const timestampRe = /^\d{4}-\d{2}-\d{2}T[\d:.+\-Z]+\s*/
-  let inBlock = false
-  const zeroLog = (line: string) => {
-    let stripped = line.replace(timestampRe, '')
-
-    // start of multiline context block: line ends with "[" (possibly after timestamp)
-    if (!inBlock && /^\[?\s*$/.test(stripped)) {
-      inBlock = true
-      return
-    }
-
-    // inside multiline block: skip context lines, look for "] message"
-    if (inBlock) {
-      const closeMatch = stripped.match(/^\]\s*(.*)$/)
-      if (closeMatch) {
-        inBlock = false
-        const msg = closeMatch[1].trim()
-        if (msg) log.zero(msg)
-      }
-      // context continuation lines like "'pid=8278'," — skip
-      return
-    }
-
-    // single-line: strip inline [ context ] and key=val prefixes
-    stripped = stripped.replace(/\[.*?\]\s*/g, '')
-    stripped = stripped.replace(/^(?:\w+=\S+,)*\w+=\S+\s+/, '')
-    stripped = stripped.trim()
-
-    if (!stripped || /^[\[\]',\s]*$/.test(stripped)) return
-
-    log.zero(stripped)
-  }
-
   child.stdout?.on('data', (data: Buffer) => {
     const lines = data.toString().trim().split('\n')
     for (const line of lines) {
-      zeroLog(line)
+      log.debug.zero(line)
     }
   })
 
-  const result = { child, env, stderrBuf: '' }
-
   child.stderr?.on('data', (data: Buffer) => {
-    const chunk = data.toString()
-    result.stderrBuf += chunk
-    const lines = chunk.trim().split('\n')
+    const lines = data.toString().trim().split('\n')
     for (const line of lines) {
-      zeroLog(line)
+      log.debug.zero(line)
     }
   })
 
   child.on('exit', (code) => {
     if (code !== 0 && code !== null) {
-      // changeLog_pkey errors are handled by the recovery logic in startZeroLite
-      if (result.stderrBuf.includes('changeLog_pkey')) return
-      if (result.stderrBuf.includes('Could not locate the bindings file')) {
-        log.zero(
-          'native @rocicorp/zero-sqlite3 not found — native deps were not compiled.\n' +
-            'either:\n' +
-            '  • remove --disable-wasm-sqlite to use the built-in wasm sqlite\n' +
-            '  • install with native deps: bun install --trust @rocicorp/zero-sqlite3\n' +
-            '    or add "trustedDependencies": ["@rocicorp/zero-sqlite3"] to package.json'
-        )
-      } else {
-        const lastLines = result.stderrBuf.trim().split('\n').slice(-5).join('\n')
-        if (lastLines) {
-          log.zero(`exited with code ${code}:\n${lastLines}`)
-        } else {
-          log.zero(`exited with code ${code}`)
-        }
-      }
+      log.zero(`exited with code ${code}`)
     }
   })
 
-  return result
+  return child
 }
 
 async function waitForZeroCache(
   config: ZeroLiteConfig,
-  timeoutMs = 120000,
-  portOverride?: number
+  timeoutMs = 60000
 ): Promise<void> {
   const start = Date.now()
-  const url = `http://127.0.0.1:${portOverride || config.zeroPort}/`
+  const url = `http://127.0.0.1:${config.zeroPort}/`
 
   while (Date.now() - start < timeoutMs) {
     try {
       const res = await fetch(url)
-      if (res.ok || res.status === 404) return
+      if (res.ok) return
     } catch {
       // not ready yet
     }
-    await new Promise((r) => setTimeout(r, 42))
+    await new Promise((r) => setTimeout(r, 500))
   }
 
   log.zero('health check timed out, continuing anyway')

@@ -141,58 +141,6 @@ async function installTriggersOnAllTables(db: PGlite): Promise<void> {
 }
 
 /**
- * re-install change tracking triggers on any public tables that don't have them.
- * catches tables created between startup and replication start.
- */
-export async function ensureChangeTrackingOnAllTables(db: PGlite): Promise<void> {
-  const pubName = process.env.ZERO_APP_PUBLICATIONS
-  let tables: { tablename: string }[]
-
-  if (pubName) {
-    const result = await db.query<{ tablename: string }>(
-      `SELECT tablename FROM pg_publication_tables
-       WHERE pubname = $1
-         AND schemaname = 'public'
-         AND tablename NOT LIKE '_zero_%'`,
-      [pubName]
-    )
-    tables = result.rows
-  } else {
-    const result = await db.query<{ tablename: string }>(
-      `SELECT tablename FROM pg_tables
-       WHERE schemaname = 'public'
-         AND tablename NOT IN ('migrations', '_zero_changes')
-         AND tablename NOT LIKE '_zero_%'`
-    )
-    tables = result.rows
-  }
-
-  // find tables missing the change trigger
-  const triggered = await db.query<{ event_object_table: string }>(
-    `SELECT DISTINCT event_object_table FROM information_schema.triggers
-     WHERE trigger_name = '_zero_change_trigger'
-       AND event_object_schema = 'public'`
-  )
-  const hasTracker = new Set(triggered.rows.map((r) => r.event_object_table))
-
-  let count = 0
-  for (const { tablename } of tables) {
-    if (hasTracker.has(tablename)) continue
-    const quoted = quoteIdent(tablename)
-    await db.exec(`
-      CREATE TRIGGER _zero_change_trigger
-        AFTER INSERT OR UPDATE OR DELETE ON public.${quoted}
-        FOR EACH ROW EXECUTE FUNCTION public._zero_track_change();
-    `)
-    count++
-  }
-
-  if (count > 0) {
-    log.debug.pglite(`installed change tracking on ${count} new tables`)
-  }
-}
-
-/**
  * install change tracking triggers on tables in shard schemas.
  * zero-cache creates shard schemas (e.g. chat_0) with clients/mutations
  * tables that track mutation confirmations. these must be replicated
@@ -210,31 +158,10 @@ export async function installTriggersOnShardTables(db: PGlite): Promise<void> {
 
   if (result.rows.length === 0) return
 
-  // only track `clients` — that's the table zero-cache expects in the
-  // replication stream (needed for .server promise resolution).  other shard
-  // tables like `replicas` are zero-cache internal state and streaming them
-  // back causes "Unknown table" crashes in zero-cache's change-processor.
   let count = 0
   for (const { nspname } of result.rows) {
-    // remove stale triggers from non-clients tables (from previous versions)
-    const stale = await db.query<{ event_object_table: string }>(
-      `SELECT DISTINCT event_object_table FROM information_schema.triggers
-       WHERE trigger_name = '_zero_change_trigger'
-         AND event_object_schema = $1
-         AND event_object_table != 'clients'`,
-      [nspname]
-    )
-    for (const { event_object_table } of stale.rows) {
-      const qs = quoteIdent(nspname)
-      const qt = quoteIdent(event_object_table)
-      await db.exec(`DROP TRIGGER IF EXISTS _zero_change_trigger ON ${qs}.${qt}`)
-      log.debug.pglite(
-        `removed stale shard trigger from ${nspname}.${event_object_table}`
-      )
-    }
-
     const tables = await db.query<{ tablename: string }>(
-      `SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename = 'clients'`,
+      `SELECT tablename FROM pg_tables WHERE schemaname = $1`,
       [nspname]
     )
 
@@ -266,17 +193,6 @@ export async function getChangesSince(
     [watermark, limit]
   )
   return result.rows
-}
-
-export async function purgeConsumedChanges(
-  db: PGlite,
-  watermark: number
-): Promise<number> {
-  const result = await db.query<{ count: string }>(
-    'WITH deleted AS (DELETE FROM public._zero_changes WHERE watermark <= $1 RETURNING 1) SELECT count(*)::text AS count FROM deleted',
-    [watermark]
-  )
-  return Number(result.rows[0]?.count || 0)
 }
 
 export async function getCurrentWatermark(db: PGlite): Promise<number> {
