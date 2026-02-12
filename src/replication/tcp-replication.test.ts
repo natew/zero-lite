@@ -692,8 +692,8 @@ describe('tcp replication', () => {
   }, 15_000)
 
   it('handles multiple tables in same stream', async () => {
-    await db.exec(`CREATE TABLE public.other (id SERIAL PRIMARY KEY, label TEXT)`)
-    await db.exec(`CREATE PUBLICATION zero_multi FOR ALL TABLES`)
+    // create a second table and re-install tracking for both
+    await db.exec(`CREATE TABLE public.products (id SERIAL PRIMARY KEY, label TEXT)`)
     await installChangeTracking(db)
 
     const replClient = new TestPgClient(port)
@@ -707,28 +707,35 @@ describe('tcp replication', () => {
       'CREATE_REPLICATION_SLOT "multi_test" TEMPORARY LOGICAL pgoutput NOEXPORT_SNAPSHOT'
     )
     await replClient.startReplication(
-      "START_REPLICATION SLOT \"multi_test\" LOGICAL 0/0 (proto_version '1', publication_names 'zero_multi')"
+      "START_REPLICATION SLOT \"multi_test\" LOGICAL 0/0 (proto_version '1', publication_names 'zero_takeout')"
     )
 
     await replClient.collectStream(200)
 
-    await db.exec(`INSERT INTO public.items (name, value) VALUES ('t1', 1)`)
-    await db.exec(`INSERT INTO public.other (label) VALUES ('t2')`)
+    // insert into both tables
+    await db.exec(`INSERT INTO public.items (name, value) VALUES ('multi1', 1)`)
+    await db.exec(`INSERT INTO public.products (label) VALUES ('multi2')`)
 
-    const stream = await replClient.collectStream(2500)
-
-    const decoded: PgOutputMessage[] = []
-    for (const msg of stream) {
-      if (msg.type === 0x64) {
-        const result = decodeCopyData(new Uint8Array(msg.data))
-        if (result) decoded.push(result)
+    // collect until we see both relations (with timeout)
+    const allDecoded: PgOutputMessage[] = []
+    const deadline = Date.now() + 8000
+    while (Date.now() < deadline) {
+      const stream = await replClient.collectStream(500)
+      for (const msg of stream) {
+        if (msg.type === 0x64) {
+          const result = decodeCopyData(new Uint8Array(msg.data))
+          if (result) allDecoded.push(result)
+        }
       }
+      const relations = allDecoded.filter((m) => m.type === 'Relation') as RelationMessage[]
+      const tableNames = relations.map((r) => r.tableName)
+      if (tableNames.includes('items') && tableNames.includes('products')) break
     }
 
-    const relations = decoded.filter((m) => m.type === 'Relation') as RelationMessage[]
+    const relations = allDecoded.filter((m) => m.type === 'Relation') as RelationMessage[]
     const tableNames = relations.map((r) => r.tableName)
     expect(tableNames).toContain('items')
-    expect(tableNames).toContain('other')
+    expect(tableNames).toContain('products')
 
     replClient.close()
   }, 15_000)
