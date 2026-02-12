@@ -7,7 +7,14 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { createRequire } from 'node:module'
 import { totalmem } from 'node:os'
 import { dirname, resolve } from 'node:path'
@@ -20,10 +27,10 @@ import { createInstance, createPGliteInstances, runMigrations } from './pglite-m
 import { findPort } from './port.js'
 import { installChangeTracking } from './replication/change-tracker.js'
 
+import type { HttpLogStore } from './admin/http-proxy.js'
+import type { LogStore } from './admin/log-store.js'
 import type { ZeroLiteConfig } from './config.js'
 import type { PGlite } from '@electric-sql/pglite'
-import type { LogStore } from './admin/log-store.js'
-import type { HttpLogStore } from './admin/http-proxy.js'
 
 export { getConfig, getConnectionString } from './config.js'
 export type { LogLevel, ZeroLiteConfig } from './config.js'
@@ -47,8 +54,12 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
 
   // when admin ui enabled, create log store and capture all log output
   const SOURCE_MAP: Record<string, string> = {
-    'orez': 'orez', 'pglite': 'pglite', 'pg-proxy': 'proxy',
-    'zero': 'zero', 'zero-cache': 'zero', 'orez/s3': 's3',
+    orez: 'orez',
+    pglite: 'pglite',
+    'pg-proxy': 'proxy',
+    zero: 'zero',
+    'zero-cache': 'zero',
+    'orez/s3': 's3',
   }
   let logStore: LogStore | null = null
   let removeLogListener: (() => void) | null = null
@@ -180,13 +191,17 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
         }
         const elapsed = now - cdbResets.lastReset
         if (elapsed < MIN_RESET_INTERVAL_MS) {
-          log.zero(`change db reset too soon (${Math.round(elapsed / 1000)}s ago), not retrying`)
+          log.zero(
+            `change db reset too soon (${Math.round(elapsed / 1000)}s ago), not retrying`
+          )
           return
         }
 
         cdbResets.count++
         cdbResets.lastReset = now
-        log.zero(`stale change db detected, resetting (${cdbResets.count}/${MAX_CDB_RESETS})`)
+        log.zero(
+          `stale change db detected, resetting (${cdbResets.count}/${MAX_CDB_RESETS})`
+        )
 
         try {
           await instances.cdb.close()
@@ -224,36 +239,54 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
 
   // admin action handlers
   const actions = {
-    restartZero: config.skipZeroCache ? undefined : async () => {
-      if (zeroCacheProcess && !zeroCacheProcess.killed) {
-        zeroCacheProcess.kill('SIGTERM')
-        await new Promise<void>((r) => {
-          const t = setTimeout(() => { zeroCacheProcess?.kill('SIGKILL'); r() }, 3000)
-          zeroCacheProcess!.on('exit', () => { clearTimeout(t); r() })
-        })
-      }
-      const zc = await startZeroCache(config, zeroInternalPort)
-      zeroCacheProcess = zc.child
-      await waitForZeroCache(config, undefined, zeroInternalPort)
-      log.zero(`restarted ${port(config.zeroPort, 'magenta')}`)
-    },
-    resetZero: config.skipZeroCache ? undefined : async () => {
-      if (zeroCacheProcess && !zeroCacheProcess.killed) {
-        zeroCacheProcess.kill('SIGTERM')
-        await new Promise<void>((r) => {
-          const t = setTimeout(() => { zeroCacheProcess?.kill('SIGKILL'); r() }, 3000)
-          zeroCacheProcess!.on('exit', () => { clearTimeout(t); r() })
-        })
-      }
-      const replicaPath = resolve(config.dataDir, 'zero-replica.db')
-      for (const suffix of ['', '-wal', '-shm', '-wal2']) {
-        try { if (existsSync(replicaPath + suffix)) unlinkSync(replicaPath + suffix) } catch {}
-      }
-      const zc = await startZeroCache(config, zeroInternalPort)
-      zeroCacheProcess = zc.child
-      await waitForZeroCache(config, undefined, zeroInternalPort)
-      log.zero(`reset and restarted ${port(config.zeroPort, 'magenta')}`)
-    },
+    restartZero: config.skipZeroCache
+      ? undefined
+      : async () => {
+          if (zeroCacheProcess && !zeroCacheProcess.killed) {
+            zeroCacheProcess.kill('SIGTERM')
+            await new Promise<void>((r) => {
+              const t = setTimeout(() => {
+                zeroCacheProcess?.kill('SIGKILL')
+                r()
+              }, 3000)
+              zeroCacheProcess!.on('exit', () => {
+                clearTimeout(t)
+                r()
+              })
+            })
+          }
+          const zc = await startZeroCache(config, zeroInternalPort)
+          zeroCacheProcess = zc.child
+          await waitForZeroCache(config, undefined, zeroInternalPort)
+          log.zero(`restarted ${port(config.zeroPort, 'magenta')}`)
+        },
+    resetZero: config.skipZeroCache
+      ? undefined
+      : async () => {
+          if (zeroCacheProcess && !zeroCacheProcess.killed) {
+            zeroCacheProcess.kill('SIGTERM')
+            await new Promise<void>((r) => {
+              const t = setTimeout(() => {
+                zeroCacheProcess?.kill('SIGKILL')
+                r()
+              }, 3000)
+              zeroCacheProcess!.on('exit', () => {
+                clearTimeout(t)
+                r()
+              })
+            })
+          }
+          const replicaPath = resolve(config.dataDir, 'zero-replica.db')
+          for (const suffix of ['', '-wal', '-shm', '-wal2']) {
+            try {
+              if (existsSync(replicaPath + suffix)) unlinkSync(replicaPath + suffix)
+            } catch {}
+          }
+          const zc = await startZeroCache(config, zeroInternalPort)
+          zeroCacheProcess = zc.child
+          await waitForZeroCache(config, undefined, zeroInternalPort)
+          log.zero(`reset and restarted ${port(config.zeroPort, 'magenta')}`)
+        },
   }
 
   const stop = async () => {
@@ -285,7 +318,18 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
     log.debug.orez('stopped')
   }
 
-  return { config, stop, db, instances, pgPort: config.pgPort, zeroPort: config.zeroPort, logStore, zeroEnv, actions, httpLogStore }
+  return {
+    config,
+    stop,
+    db,
+    instances,
+    pgPort: config.pgPort,
+    zeroPort: config.zeroPort,
+    logStore,
+    zeroEnv,
+    actions,
+    httpLogStore,
+  }
 }
 
 function cleanupStaleLockFiles(config: ZeroLiteConfig): void {
@@ -364,7 +408,10 @@ function writeSqliteShim(): string {
   return registerPath
 }
 
-async function startZeroCache(config: ZeroLiteConfig, portOverride?: number): Promise<{ child: ChildProcess; env: Record<string, string>; stderrBuf: string }> {
+async function startZeroCache(
+  config: ZeroLiteConfig,
+  portOverride?: number
+): Promise<{ child: ChildProcess; env: Record<string, string>; stderrBuf: string }> {
   // resolve @rocicorp/zero entry for finding zero-cache modules
   const zeroEntry = resolvePackage('@rocicorp/zero')
 
@@ -533,7 +580,7 @@ async function startZeroCache(config: ZeroLiteConfig, portOverride?: number): Pr
 async function waitForZeroCache(
   config: ZeroLiteConfig,
   timeoutMs = 120000,
-  portOverride?: number,
+  portOverride?: number
 ): Promise<void> {
   const start = Date.now()
   const url = `http://127.0.0.1:${portOverride || config.zeroPort}/`

@@ -5,6 +5,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http'
+
 import type { Socket } from 'node:net'
 
 export interface HttpLogEntry {
@@ -22,7 +23,10 @@ export interface HttpLogEntry {
 
 export interface HttpLogStore {
   push(entry: Omit<HttpLogEntry, 'id'>): void
-  query(opts?: { since?: number; path?: string }): { entries: HttpLogEntry[]; cursor: number }
+  query(opts?: { since?: number; path?: string }): {
+    entries: HttpLogEntry[]
+    cursor: number
+  }
   clear(): void
 }
 

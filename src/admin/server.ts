@@ -4,11 +4,13 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http'
+
 import { log } from '../log.js'
 import { getAdminHtml } from './ui.js'
-import type { LogStore } from './log-store.js'
-import type { HttpLogStore } from './http-proxy.js'
+
 import type { ZeroLiteConfig } from '../config.js'
+import type { HttpLogStore } from './http-proxy.js'
+import type { LogStore } from './log-store.js'
 
 export interface AdminActions {
   restartZero?: () => Promise<void>
@@ -72,7 +74,9 @@ export function startAdminServer(opts: AdminServerOpts): Promise<Server> {
 
       if (req.method === 'GET' && url.pathname === '/api/env') {
         const filtered = Object.entries(zeroEnv)
-          .filter(([k]) => k.startsWith('ZERO_') || k === 'NODE_ENV' || k === 'NODE_OPTIONS')
+          .filter(
+            ([k]) => k.startsWith('ZERO_') || k === 'NODE_ENV' || k === 'NODE_OPTIONS'
+          )
           .sort(([a], [b]) => a.localeCompare(b))
         json(res, { env: Object.fromEntries(filtered) })
         return

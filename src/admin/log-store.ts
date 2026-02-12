@@ -62,7 +62,10 @@ export function createLogStore(dataDir: string, writeToDisk = true): LogStore {
     if (writeToDisk) {
       try {
         const ts = new Date(entry.ts).toISOString()
-        appendFileSync(logFile, '[' + ts + '] [' + source + '] [' + level + '] ' + entry.msg + '\n')
+        appendFileSync(
+          logFile,
+          '[' + ts + '] [' + source + '] [' + level + '] ' + entry.msg + '\n'
+        )
         rotateIfNeeded()
       } catch {}
     }

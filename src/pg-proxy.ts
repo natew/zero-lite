@@ -694,7 +694,9 @@ export async function startPgProxy(
       // track active connections per database
       activeConns[dbName] = (activeConns[dbName] || 0) + 1
 
-      console.info(`[orez-proxy#${connId}] connect db=${dbName} repl=${params.replication || 'none'}`)
+      console.info(
+        `[orez-proxy#${connId}] connect db=${dbName} repl=${params.replication || 'none'}`
+      )
 
       const { db } = getDbContext(dbName)
       await db.waitReady

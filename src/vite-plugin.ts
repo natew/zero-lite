@@ -36,7 +36,7 @@ export default function orez(options?: OrezPluginOptions): Plugin {
       if (options?.admin && result.logStore) {
         const { findPort } = await import('./port.js')
         const { log } = await import('./log.js')
-        const adminPort = options.adminPort || (result.config.zeroPort + 2)
+        const adminPort = options.adminPort || result.config.zeroPort + 2
         const resolvedPort = await findPort(adminPort)
         const { startAdminServer } = await import('./admin/server.js')
         adminServer = await startAdminServer({

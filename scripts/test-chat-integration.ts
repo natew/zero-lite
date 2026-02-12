@@ -31,9 +31,15 @@ let exitCode = 0
 async function isPortInUse(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const sock = createConnection({ port, host: '127.0.0.1' })
-    sock.on('connect', () => { sock.destroy(); resolve(true) })
+    sock.on('connect', () => {
+      sock.destroy()
+      resolve(true)
+    })
     sock.on('error', () => resolve(false))
-    sock.setTimeout(300, () => { sock.destroy(); resolve(false) })
+    sock.setTimeout(300, () => {
+      sock.destroy()
+      resolve(false)
+    })
   })
 }
 
@@ -51,15 +57,26 @@ async function main() {
     try {
       const pkg = JSON.parse(readFileSync(resolve(CHAT_SOURCE, 'package.json'), 'utf-8'))
       return pkg.engines?.node
-    } catch { return null }
+    } catch {
+      return null
+    }
   })()
   if (chatNodeVersion) {
     try {
       // find fnm dir (may contain spaces, e.g. "Application Support")
-      const fnmDirMatch = execSync('fnm env --shell bash', { encoding: 'utf-8' })
-        .match(/FNM_DIR="([^"]+)"/)
-      const fnmBase = fnmDirMatch?.[1] || resolve(process.env.HOME!, 'Library', 'Application Support', 'fnm')
-      const versionDir = resolve(fnmBase, 'node-versions', `v${chatNodeVersion}`, 'installation', 'bin')
+      const fnmDirMatch = execSync('fnm env --shell bash', { encoding: 'utf-8' }).match(
+        /FNM_DIR="([^"]+)"/
+      )
+      const fnmBase =
+        fnmDirMatch?.[1] ||
+        resolve(process.env.HOME!, 'Library', 'Application Support', 'fnm')
+      const versionDir = resolve(
+        fnmBase,
+        'node-versions',
+        `v${chatNodeVersion}`,
+        'installation',
+        'bin'
+      )
       if (existsSync(versionDir)) {
         process.env.PATH = `${versionDir}:${process.env.PATH}`
         log(`using node ${chatNodeVersion} from ${versionDir}`)
@@ -84,7 +101,9 @@ async function main() {
     s3: await findFreePort(9290),
     bunny: await findFreePort(3533),
   }
-  log(`ports: pg=${PORTS.pg} zero=${PORTS.zero} web=${PORTS.web} s3=${PORTS.s3} bunny=${PORTS.bunny}`)
+  log(
+    `ports: pg=${PORTS.pg} zero=${PORTS.zero} web=${PORTS.web} s3=${PORTS.s3} bunny=${PORTS.bunny}`
+  )
 
   try {
     // step 1: build orez
@@ -126,7 +145,11 @@ async function main() {
       execSync('bun run one patch', { cwd: TEST_DIR, stdio: 'inherit', timeout: 30_000 })
     } catch {}
     try {
-      execSync('bun tko run generate-env', { cwd: TEST_DIR, stdio: 'inherit', timeout: 30_000 })
+      execSync('bun tko run generate-env', {
+        cwd: TEST_DIR,
+        stdio: 'inherit',
+        timeout: 30_000,
+      })
     } catch {}
 
     // step 4: copy local orez build into node_modules
@@ -137,10 +160,14 @@ async function main() {
     }
     const { mkdirSync: mkdir, cpSync } = await import('node:fs')
     mkdir(orezInModules, { recursive: true })
-    cpSync(resolve(OREZ_ROOT, 'dist'), resolve(orezInModules, 'dist'), { recursive: true })
+    cpSync(resolve(OREZ_ROOT, 'dist'), resolve(orezInModules, 'dist'), {
+      recursive: true,
+    })
     cpSync(resolve(OREZ_ROOT, 'package.json'), resolve(orezInModules, 'package.json'))
     if (existsSync(resolve(OREZ_ROOT, 'src'))) {
-      cpSync(resolve(OREZ_ROOT, 'src'), resolve(orezInModules, 'src'), { recursive: true })
+      cpSync(resolve(OREZ_ROOT, 'src'), resolve(orezInModules, 'src'), {
+        recursive: true,
+      })
     }
     // ensure bin link points to the right cli entry
     const binDir = resolve(TEST_DIR, 'node_modules', '.bin')
@@ -186,8 +213,14 @@ async function main() {
         .replace(/(ZERO_CHANGE_DB=.*127\.0\.0\.1:)\d+/g, `$1${PORTS.pg}`)
         .replace(/(CLOUDFLARE_R2_ENDPOINT=.*localhost:)\d+/g, `$1${PORTS.s3}`)
         .replace(/(CLOUDFLARE_R2_PUBLIC_URL=.*localhost:)\d+/g, `$1${PORTS.s3}`)
-        .replace(/VITE_ZERO_HOSTNAME=localhost:\d+/, `VITE_ZERO_HOSTNAME=localhost:${PORTS.zero}`)
-        .replace(/VITE_WEB_HOSTNAME=localhost:\d+/, `VITE_WEB_HOSTNAME=localhost:${PORTS.web}`)
+        .replace(
+          /VITE_ZERO_HOSTNAME=localhost:\d+/,
+          `VITE_ZERO_HOSTNAME=localhost:${PORTS.zero}`
+        )
+        .replace(
+          /VITE_WEB_HOSTNAME=localhost:\d+/,
+          `VITE_WEB_HOSTNAME=localhost:${PORTS.web}`
+        )
         .replace(/(BETTER_AUTH_URL=.*localhost:)\d+/g, `$1${PORTS.web}`)
         .replace(/(ONE_SERVER_URL=.*localhost:)\d+/g, `$1${PORTS.web}`)
         // replace docker host.docker.internal refs with localhost
@@ -204,19 +237,25 @@ async function main() {
     // step 7: patch hardcoded ports everywhere (source + test files)
     // use broad regex ranges so --skip-clone works even when a previous run
     // patched ports to different values (e.g. 8081→8082 then 8082→8083)
-    log(`patching ports: web→${PORTS.web}, zero→${PORTS.zero}, bunny→${PORTS.bunny}, s3→${PORTS.s3}`)
+    log(
+      `patching ports: web→${PORTS.web}, zero→${PORTS.zero}, bunny→${PORTS.bunny}, s3→${PORTS.s3}`
+    )
     execSync(
       `find src playwright.config.ts -type f \\( -name "*.ts" -o -name "*.tsx" \\) -exec sed -i '' -E ` +
-      `-e 's/localhost:8[0-1][0-9][0-9]/localhost:${PORTS.web}/g' ` +
-      `-e 's/localhost:50[0-9][0-9]/localhost:${PORTS.zero}/g' ` +
-      `-e 's/localhost:35[0-9][0-9]/localhost:${PORTS.bunny}/g' ` +
-      `-e 's/localhost:92[0-9][0-9]/localhost:${PORTS.s3}/g' ` +
-      `-e "s/'50[0-9][0-9]'/'${PORTS.zero}'/g" {} +`,
+        `-e 's/localhost:8[0-1][0-9][0-9]/localhost:${PORTS.web}/g' ` +
+        `-e 's/localhost:50[0-9][0-9]/localhost:${PORTS.zero}/g' ` +
+        `-e 's/localhost:35[0-9][0-9]/localhost:${PORTS.bunny}/g' ` +
+        `-e 's/localhost:92[0-9][0-9]/localhost:${PORTS.s3}/g' ` +
+        `-e "s/'50[0-9][0-9]'/'${PORTS.zero}'/g" {} +`,
       { cwd: TEST_DIR, stdio: 'inherit' }
     )
 
     // step 8: clean all caches (stale compiled modules with old ports)
-    for (const cache of ['node_modules/.vite', 'node_modules/.vxrn', 'node_modules/.cache']) {
+    for (const cache of [
+      'node_modules/.vite',
+      'node_modules/.vxrn',
+      'node_modules/.cache',
+    ]) {
       const cachePath = resolve(TEST_DIR, cache)
       if (existsSync(cachePath)) {
         rmSync(cachePath, { recursive: true, force: true })
@@ -245,16 +284,29 @@ async function main() {
     // node_modules with a shim that redirects to bedrock-sqlite wasm.
     log('shimming @rocicorp/zero-sqlite3 → bedrock-sqlite wasm')
     const zeroSqlitePkg = resolve(TEST_DIR, 'node_modules', '@rocicorp', 'zero-sqlite3')
-    const bedrockPath = resolve(TEST_DIR, 'node_modules', 'bedrock-sqlite', 'dist', 'sqlite3.js')
+    const bedrockPath = resolve(
+      TEST_DIR,
+      'node_modules',
+      'bedrock-sqlite',
+      'dist',
+      'sqlite3.js'
+    )
     if (existsSync(zeroSqlitePkg)) {
       rmSync(zeroSqlitePkg, { recursive: true, force: true })
     }
     const { mkdirSync: mkdirShim } = await import('node:fs')
     mkdirShim(resolve(zeroSqlitePkg, 'lib'), { recursive: true })
-    writeFileSync(resolve(zeroSqlitePkg, 'package.json'), JSON.stringify({
-      name: '@rocicorp/zero-sqlite3', version: '0.0.0-shim', main: './lib/index.js'
-    }))
-    writeFileSync(resolve(zeroSqlitePkg, 'lib', 'index.js'), `'use strict';
+    writeFileSync(
+      resolve(zeroSqlitePkg, 'package.json'),
+      JSON.stringify({
+        name: '@rocicorp/zero-sqlite3',
+        version: '0.0.0-shim',
+        main: './lib/index.js',
+      })
+    )
+    writeFileSync(
+      resolve(zeroSqlitePkg, 'lib', 'index.js'),
+      `'use strict';
 var mod = require('${bedrockPath}');
 var OrigDatabase = mod.Database;
 var SqliteError = mod.SqliteError;
@@ -295,14 +347,17 @@ Database.SQLITE_SCANSTAT_NCYCLE = 7;
 Database.SQLITE_SCANSTAT_COMPLEX = 8;
 module.exports = Database;
 module.exports.SqliteError = SqliteError;
-`)
+`
+    )
     log('sqlite wasm shim ready')
 
     // step 10c: write migration runner script
     const { mkdirSync: mkdirOrez } = await import('node:fs')
     mkdirOrez(resolve(TEST_DIR, '.orez'), { recursive: true })
     const migrateScript = resolve(TEST_DIR, '.orez', 'run-migrations.sh')
-    writeFileSync(migrateScript, `#!/bin/bash
+    writeFileSync(
+      migrateScript,
+      `#!/bin/bash
 set -e
 echo "[on-db-ready] running migrations..."
 echo "[on-db-ready] DATABASE_URL=$DATABASE_URL"
@@ -312,7 +367,8 @@ export ALLOW_MISSING_ENV=1
 cd "${TEST_DIR}"
 node src/database/dist/migrate.js
 echo "[on-db-ready] migrations complete"
-`)
+`
+    )
     execSync(`chmod +x "${migrateScript}"`)
 
     // step 11a: start bunny-mock server
@@ -321,7 +377,10 @@ echo "[on-db-ready] migrations complete"
     const bunnyDataDir = resolve(TEST_DIR, '.orez', 'bunny-data')
     const { mkdirSync: mkdirBunny } = await import('node:fs')
     mkdirBunny(bunnyDataDir, { recursive: true })
-    const bunnyServerSrc = readFileSync(resolve(TEST_DIR, 'src', 'bunny-mock', 'server.js'), 'utf-8')
+    const bunnyServerSrc = readFileSync(
+      resolve(TEST_DIR, 'src', 'bunny-mock', 'server.js'),
+      'utf-8'
+    )
     const bunnyServerPatched = bunnyServerSrc
       .replace(/const PORT = \d+/, `const PORT = ${PORTS.bunny}`)
       .replace(/const STORAGE_DIR = '\/data'/, `const STORAGE_DIR = '${bunnyDataDir}'`)
@@ -349,7 +408,10 @@ echo "[on-db-ready] migrations complete"
         const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
         if (m) {
           let val = m[2].trim()
-          if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'")))
+          if (
+            (val.startsWith('"') && val.endsWith('"')) ||
+            (val.startsWith("'") && val.endsWith("'"))
+          )
             val = val.slice(1, -1)
           envDevForOrez[m[1]] = val
         }
@@ -384,7 +446,7 @@ echo "[on-db-ready] migrations complete"
           VITE_PORT_WEB: String(PORTS.web),
           VITE_PORT_ZERO: String(PORTS.zero),
         },
-      },
+      }
     )
     children.push(backendProc)
 
@@ -401,21 +463,25 @@ echo "[on-db-ready] migrations complete"
 
     // step 12: start web frontend (dev mode with --clean)
     log('starting web frontend')
-    const webProc = spawn('bun', ['run:dev', 'one', 'dev', '--clean', '--port', String(PORTS.web)], {
-      cwd: TEST_DIR,
-      stdio: 'inherit',
-      env: {
-        ...process.env,
-        ALLOW_MISSING_ENV: '1',
-        DEBUG: '1',
-        VITE_PORT_WEB: String(PORTS.web),
-        VITE_PORT_ZERO: String(PORTS.zero),
-        VITE_PUBLIC_ZERO_SERVER: `http://localhost:${PORTS.zero}`,
-        ONE_SERVER_URL: `http://localhost:${PORTS.web}`,
-        ZERO_MUTATE_URL: `http://localhost:${PORTS.web}/api/zero/push`,
-        ZERO_QUERY_URL: `http://localhost:${PORTS.web}/api/zero/pull`,
-      },
-    })
+    const webProc = spawn(
+      'bun',
+      ['run:dev', 'one', 'dev', '--clean', '--port', String(PORTS.web)],
+      {
+        cwd: TEST_DIR,
+        stdio: 'inherit',
+        env: {
+          ...process.env,
+          ALLOW_MISSING_ENV: '1',
+          DEBUG: '1',
+          VITE_PORT_WEB: String(PORTS.web),
+          VITE_PORT_ZERO: String(PORTS.zero),
+          VITE_PUBLIC_ZERO_SERVER: `http://localhost:${PORTS.zero}`,
+          ONE_SERVER_URL: `http://localhost:${PORTS.web}`,
+          ZERO_MUTATE_URL: `http://localhost:${PORTS.web}/api/zero/push`,
+          ZERO_QUERY_URL: `http://localhost:${PORTS.web}/api/zero/pull`,
+        },
+      }
+    )
     children.push(webProc)
 
     webProc.on('exit', (code) => {
@@ -448,7 +514,10 @@ echo "[on-db-ready] migrations complete"
         const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/)
         if (match) {
           let val = match[2].trim()
-          if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          if (
+            (val.startsWith('"') && val.endsWith('"')) ||
+            (val.startsWith("'") && val.endsWith("'"))
+          ) {
             val = val.slice(1, -1)
           }
           dotenvVars[match[1]] = val
@@ -525,7 +594,9 @@ async function waitForPort(port: number, timeoutMs: number, name: string): Promi
     } catch {}
     await new Promise((r) => setTimeout(r, 1000))
   }
-  throw new Error(`${name} (port ${port}) not ready after ${Math.round(timeoutMs / 1000)}s`)
+  throw new Error(
+    `${name} (port ${port}) not ready after ${Math.round(timeoutMs / 1000)}s`
+  )
 }
 
 process.on('SIGINT', async () => {

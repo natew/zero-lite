@@ -788,23 +788,24 @@ const main = defineCommand({
   },
   async run({ args }) {
     const startTime = Date.now()
-    const { config, stop, logStore, zeroEnv, actions, httpLogStore } = await startZeroLite({
-      pgPort: Number(args['pg-port']),
-      zeroPort: Number(args['zero-port']),
-      dataDir: args['data-dir'],
-      migrationsDir: args.migrations,
-      seedFile: args.seed,
-      pgUser: args['pg-user'],
-      pgPassword: args['pg-password'],
-      skipZeroCache: args['skip-zero-cache'],
-      disableWasmSqlite: args['disable-wasm-sqlite'],
-      logLevel: (args['log-level'] as 'error' | 'warn' | 'info' | 'debug') || undefined,
-      logEnv: args['log-env'],
-      onDbReady: args['on-db-ready'],
-      admin: args.admin,
-      adminPort: Number(args['admin-port']),
-      adminLogs: args['admin-logs'],
-    })
+    const { config, stop, logStore, zeroEnv, actions, httpLogStore } =
+      await startZeroLite({
+        pgPort: Number(args['pg-port']),
+        zeroPort: Number(args['zero-port']),
+        dataDir: args['data-dir'],
+        migrationsDir: args.migrations,
+        seedFile: args.seed,
+        pgUser: args['pg-user'],
+        pgPassword: args['pg-password'],
+        skipZeroCache: args['skip-zero-cache'],
+        disableWasmSqlite: args['disable-wasm-sqlite'],
+        logLevel: (args['log-level'] as 'error' | 'warn' | 'info' | 'debug') || undefined,
+        logEnv: args['log-env'],
+        onDbReady: args['on-db-ready'],
+        admin: args.admin,
+        adminPort: Number(args['admin-port']),
+        adminLogs: args['admin-logs'],
+      })
 
     let s3Server: import('node:http').Server | null = null
     if (args.s3) {
@@ -818,7 +819,7 @@ const main = defineCommand({
     let adminServer: import('node:http').Server | null = null
     if (args.admin && logStore) {
       const { findPort } = await import('./port.js')
-      const adminPort = Number(args['admin-port']) || (config.zeroPort + 2)
+      const adminPort = Number(args['admin-port']) || config.zeroPort + 2
       const resolvedPort = await findPort(adminPort)
       const { startAdminServer } = await import('./admin/server.js')
       adminServer = await startAdminServer({

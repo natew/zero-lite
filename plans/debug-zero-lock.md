@@ -16,6 +16,7 @@ NOT a login failure, NOT primarily the SQLITE_CORRUPT issue.
 ## the deadlock scenario
 
 the `app.migrate` zero mutator (`test-chat/src/data/models/app.ts:62-64`):
+
 ```typescript
 migrate: async ({ server }) => {
   await server?.actions.app.migrateInitialApps()
@@ -26,12 +27,14 @@ this runs **inside PushProcessor's transaction**. PushProcessor (from
 @rocicorp/zero) wraps mutations in a BEGIN...COMMIT on Connection A.
 
 `migrateInitialApps()` (`test-chat/src/apps/migrateInitialApps.ts:33-83`):
+
 1. opens Connection B via `getDBClient({ connectionString: ZERO_UPSTREAM_DB })`
 2. runs `SELECT * FROM userPublic` (Connection B, through proxy)
 3. calls `publishApp()` which uses `getDb()` (Connection C, Drizzle singleton)
 4. `publishApp()` does INSERT/UPDATE on `app` table (Connection C, through proxy)
 
 because pglite is single-session:
+
 - Connection A has an open BEGIN (PushProcessor's transaction)
 - Connection B's queries run inside Connection A's transaction
 - Connection C's INSERT also runs inside Connection A's transaction
@@ -40,20 +43,21 @@ because pglite is single-session:
 - this ROLLBACK kills Connection A's transaction!
 
 additionally:
+
 - interleaved connections can confuse pglite's protocol state
 - any connection closing triggers ROLLBACK which kills the shared transaction
 
 ## key files
 
-| file | role |
-|------|------|
-| `src/pg-proxy.ts:696-714` | socket close → ROLLBACK + RESET (kills shared tx!) |
-| `src/replication/handler.ts:482-548` | replication poll loop (mutex per poll) |
-| `src/mutex.ts` | simple queue-based mutex, per-message serialization |
-| `test-chat/src/data/models/app.ts:62-64` | app.migrate mutator (calls migrateInitialApps inside tx) |
-| `test-chat/src/apps/migrateInitialApps.ts` | opens separate DB connections for direct SQL |
-| `test-chat/src/apps/publish.ts` | uses getDb() Drizzle singleton for INSERT |
-| `test-chat/src/database/index.ts:11-33` | getDb() creates pg.Pool singleton |
+| file                                       | role                                                     |
+| ------------------------------------------ | -------------------------------------------------------- |
+| `src/pg-proxy.ts:696-714`                  | socket close → ROLLBACK + RESET (kills shared tx!)       |
+| `src/replication/handler.ts:482-548`       | replication poll loop (mutex per poll)                   |
+| `src/mutex.ts`                             | simple queue-based mutex, per-message serialization      |
+| `test-chat/src/data/models/app.ts:62-64`   | app.migrate mutator (calls migrateInitialApps inside tx) |
+| `test-chat/src/apps/migrateInitialApps.ts` | opens separate DB connections for direct SQL             |
+| `test-chat/src/apps/publish.ts`            | uses getDb() Drizzle singleton for INSERT                |
+| `test-chat/src/database/index.ts:11-33`    | getDb() creates pg.Pool singleton                        |
 
 ## connection flow during the bug
 
@@ -76,6 +80,7 @@ zero-cache → POST /api/zero/push
 ## fix options
 
 1. **move migrateInitialApps to asyncTask** (chat-side fix):
+
    ```typescript
    migrate: async ({ server }) => {
      server?.asyncTasks.push(async () => {
@@ -83,6 +88,7 @@ zero-cache → POST /api/zero/push
      })
    }
    ```
+
    asyncTasks run AFTER the transaction commits, with their own connections.
 
 2. **don't ROLLBACK on connection close if another tx is active** (orez-side fix):
@@ -98,6 +104,7 @@ zero-cache → POST /api/zero/push
 ## investigation log
 
 ### session 1 (from compaction summary)
+
 - replication handler confirmed working (11 changes streamed wm 3781→3792)
 - only 1 handler active (no concurrent handler race)
 - watermark type is `number` throughout
@@ -105,6 +112,7 @@ zero-cache → POST /api/zero/push
 - first login 401 then succeeds on retry
 
 ### session 2 (current)
+
 - mapped all mutex usage across codebase
 - identified socket.on('close') ROLLBACK as potential transaction killer
 - identified migrateInitialApps opening separate connections inside PushProcessor tx

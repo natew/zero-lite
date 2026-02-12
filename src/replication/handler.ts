@@ -268,7 +268,9 @@ export async function handleStartReplication(
 ): Promise<void> {
   activeHandlerCount++
   const handlerId = activeHandlerCount
-  console.info(`[orez-repl#${handlerId}] START_REPLICATION (active handlers: ${activeHandlerCount})`)
+  console.info(
+    `[orez-repl#${handlerId}] START_REPLICATION (active handlers: ${activeHandlerCount})`
+  )
   log.debug.proxy('replication: entering streaming mode')
 
   // send CopyBothResponse to enter streaming mode
@@ -463,7 +465,9 @@ export async function handleStartReplication(
     mutex.release()
   }
 
-  console.info(`[orez-repl#${handlerId}] setup complete, starting poll (lastWatermark=${lastWatermark})`)
+  console.info(
+    `[orez-repl#${handlerId}] setup complete, starting poll (lastWatermark=${lastWatermark})`
+  )
 
   // track which tables we've sent RELATION messages for
   const sentRelations = new Set<string>()
@@ -492,8 +496,10 @@ export async function handleStartReplication(
         }
 
         if (changes.length > 0) {
-          const tables = [...new Set(changes.map(c => c.table_name))].join(',')
-          console.info(`[orez-repl#${handlerId}] found ${changes.length} changes [${tables}] (wm ${lastWatermark}→${changes[changes.length - 1].watermark}, type=${typeof changes[0].watermark})`)
+          const tables = [...new Set(changes.map((c) => c.table_name))].join(',')
+          console.info(
+            `[orez-repl#${handlerId}] found ${changes.length} changes [${tables}] (wm ${lastWatermark}→${changes[changes.length - 1].watermark}, type=${typeof changes[0].watermark})`
+          )
           await streamChanges(
             changes,
             writer,
@@ -513,7 +519,9 @@ export async function handleStartReplication(
             try {
               const purged = await purgeConsumedChanges(db, lastWatermark)
               if (purged > 0) {
-                console.info(`[orez-repl#${handlerId}] purged ${purged} changes (wm<=${lastWatermark})`)
+                console.info(
+                  `[orez-repl#${handlerId}] purged ${purged} changes (wm<=${lastWatermark})`
+                )
               }
             } finally {
               mutex.release()
@@ -524,7 +532,9 @@ export async function handleStartReplication(
           const now = Date.now()
           if (now - lastIdleLog > 10000) {
             lastIdleLog = now
-            console.info(`[orez-repl#${handlerId}] idle (lastWatermark=${lastWatermark}, type=${typeof lastWatermark})`)
+            console.info(
+              `[orez-repl#${handlerId}] idle (lastWatermark=${lastWatermark}, type=${typeof lastWatermark})`
+            )
           }
         }
 
@@ -550,7 +560,9 @@ export async function handleStartReplication(
   log.debug.proxy('replication: starting poll loop')
   await poll()
   activeHandlerCount--
-  console.info(`[orez-repl#${handlerId}] poll loop exited (remaining handlers: ${activeHandlerCount})`)
+  console.info(
+    `[orez-repl#${handlerId}] poll loop exited (remaining handlers: ${activeHandlerCount})`
+  )
 }
 
 async function streamChanges(
