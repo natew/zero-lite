@@ -1,9 +1,3 @@
-<p align="center">
-  <picture>
-    <img src="orez.png" alt="orez" width="9611" height="2395" style="max-width: 100%; height: auto;" />
-  </picture>
-</p>
-
 [Zero](https://zero.rocicorp.dev) is amazing, but setting it up alongside Postgres requires effort, native dependencies, and oftentimes Docker. 
 
 orez makes [PGlite](https://pglite.dev) work with Zero by hacking together logical replication on top. To remove all native dependences, it also ships a custom WASM fork of the same SQLite [bedrock branch](https://sqlite.org/src/timeline?t=begin-concurrent) that Zero uses. Inlcudes a CLI, programmatic API, and Vite plugin.
