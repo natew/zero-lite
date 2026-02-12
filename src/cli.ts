@@ -152,6 +152,13 @@ function shouldSkipStatement(stmt: string): boolean {
       const extName = node.object?.String?.sval
       if (extName && UNSUPPORTED_EXTENSIONS.has(extName)) return true
     }
+
+    // skip CREATE/ALTER/DROP PUBLICATION — pglite doesn't support wal_level=logical
+    // internally, so CREATE PUBLICATION errors and can roll back the transaction.
+    // orez handles replication via its own change tracker, not publications.
+    if (nodeType === 'CreatePublicationStmt' || nodeType === 'AlterPublicationStmt')
+      return true
+    if (nodeType === 'DropStmt' && node.removeType === 'OBJECT_PUBLICATION') return true
   }
 
   return false
@@ -263,9 +270,22 @@ export async function execDumpFile(
     const colList =
       copyTarget.columns.length > 0 ? ` (${copyTarget.columns.join(', ')})` : ''
     const insert = `INSERT INTO ${copyTarget.table}${colList} VALUES ${copyRows.join(', ')}`
-    await db.exec(insert)
-    executed += copyRows.length
-    batchCount += copyRows.length
+    try {
+      await db.exec(insert)
+      executed += copyRows.length
+      batchCount += copyRows.length
+    } catch (err: any) {
+      log.orez(`warning: ${err?.message?.split('\n')[0] ?? err}`)
+      skipped += copyRows.length
+      // transaction is aborted, rollback and start fresh
+      if (inBatch) {
+        try {
+          await db.exec('ROLLBACK')
+        } catch {}
+        inBatch = false
+        batchCount = 0
+      }
+    }
     copyRows = []
     copyRowsBytes = 0
   }
@@ -458,6 +478,36 @@ export async function execDumpFile(
   return { executed, skipped }
 }
 
+// after restore, drop triggers whose backing functions no longer exist.
+// this happens when a filtered dump includes triggers on public-schema tables
+// that reference functions from excluded schemas.
+async function cleanupBrokenTriggers(db: { exec: (q: string) => Promise<unknown> }) {
+  try {
+    const result = (await db.exec(`
+      SELECT tgname, relname, nspname, proname, pronamespace
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      LEFT JOIN pg_proc p ON p.oid = t.tgfoid
+      WHERE NOT t.tgisinternal
+        AND n.nspname = 'public'
+        AND (p.oid IS NULL OR p.pronamespace != n.oid)
+    `)) as any
+
+    const rows = result?.rows || result?.[0]?.rows || []
+    for (const row of rows) {
+      const trigger = row.tgname
+      const table = row.relname
+      try {
+        await db.exec(`DROP TRIGGER IF EXISTS "${trigger}" ON "public"."${table}"`)
+        log.orez(`dropped broken trigger "${trigger}" on "${table}"`)
+      } catch {}
+    }
+  } catch {
+    // best-effort cleanup
+  }
+}
+
 // try restoring via wire protocol (postgres running on given port)
 // returns true if connected and restored, false if connection unavailable
 async function tryWireRestore(opts: {
@@ -496,6 +546,8 @@ async function tryWireRestore(opts: {
 
     const db = { exec: (query: string) => sql.unsafe(query) as Promise<unknown> }
     const { executed, skipped } = await execDumpFile(db, opts.sqlFile)
+    await cleanupBrokenTriggers(db)
+    await db.exec('SET search_path TO public')
     log.orez(
       `restored ${opts.sqlFile} via wire protocol (${executed} statements, ${skipped} skipped)`
     )
@@ -533,6 +585,8 @@ async function directRestore(opts: {
     }
 
     const { executed, skipped } = await execDumpFile(db, opts.sqlFile)
+    await cleanupBrokenTriggers(db)
+    await db.exec('SET search_path TO public')
     log.orez(
       `restored ${opts.sqlFile} into ${dataPath} (${executed} statements, ${skipped} skipped)`
     )
