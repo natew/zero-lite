@@ -757,6 +757,16 @@ const main = defineCommand({
       description: 'command to run once all services are healthy',
       default: '',
     },
+    admin: {
+      type: 'boolean',
+      description: 'start admin dashboard',
+      default: false,
+    },
+    'admin-port': {
+      type: 'string',
+      description: 'admin dashboard port',
+      default: '6477',
+    },
   },
   subCommands: {
     s3: s3Command,
@@ -764,19 +774,22 @@ const main = defineCommand({
     pg_restore: pgRestoreCommand,
   },
   async run({ args }) {
-    const { config, stop } = await startZeroLite({
-      pgPort: Number(args['pg-port']),
-      zeroPort: Number(args['zero-port']),
-      dataDir: args['data-dir'],
-      migrationsDir: args.migrations,
-      seedFile: args.seed,
-      pgUser: args['pg-user'],
-      pgPassword: args['pg-password'],
-      skipZeroCache: args['skip-zero-cache'],
-      disableWasmSqlite: args['disable-wasm-sqlite'],
-      logLevel: (args['log-level'] as 'error' | 'warn' | 'info' | 'debug') || undefined,
-      onDbReady: args['on-db-ready'],
-    })
+    const adminPort = args.admin ? Number(args['admin-port']) : 0
+    const { config, stop, zeroEnv, logStore, restartZero, resetZero } =
+      await startZeroLite({
+        pgPort: Number(args['pg-port']),
+        zeroPort: Number(args['zero-port']),
+        adminPort,
+        dataDir: args['data-dir'],
+        migrationsDir: args.migrations,
+        seedFile: args.seed,
+        pgUser: args['pg-user'],
+        pgPassword: args['pg-password'],
+        skipZeroCache: args['skip-zero-cache'],
+        disableWasmSqlite: args['disable-wasm-sqlite'],
+        logLevel: (args['log-level'] as 'error' | 'warn' | 'info' | 'debug') || undefined,
+        onDbReady: args['on-db-ready'],
+      })
 
     let s3Server: import('node:http').Server | null = null
     if (args.s3) {
@@ -785,6 +798,20 @@ const main = defineCommand({
         port: Number(args['s3-port']),
         dataDir: args['data-dir'],
       })
+    }
+
+    let adminServer: import('node:http').Server | null = null
+    if (args.admin && logStore && zeroEnv) {
+      const { startAdminServer } = await import('./admin/server.js')
+      adminServer = await startAdminServer({
+        port: config.adminPort,
+        logStore,
+        config,
+        zeroEnv,
+        actions: { restartZero, resetZero },
+        startTime: Date.now(),
+      })
+      log.orez(`admin: http://localhost:${config.adminPort}`)
     }
 
     log.orez('ready')
@@ -814,11 +841,13 @@ const main = defineCommand({
     }
 
     process.on('SIGINT', async () => {
+      adminServer?.close()
       s3Server?.close()
       await stop()
       process.exit(0)
     })
     process.on('SIGTERM', async () => {
+      adminServer?.close()
       s3Server?.close()
       await stop()
       process.exit(0)

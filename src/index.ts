@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 
+import { createLogStore, type LogStore } from './admin/log-store.js'
 import { getConfig, getConnectionString } from './config.js'
 import { log, port, setLogLevel } from './log.js'
 import { startPgProxy } from './pg-proxy.js'
@@ -46,12 +47,20 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
   const zeroPort = config.skipZeroCache
     ? config.zeroPort
     : await findPort(config.zeroPort)
+  const adminPort = config.adminPort > 0 ? await findPort(config.adminPort) : 0
   if (pgPort !== config.pgPort)
     log.debug.orez(`port ${config.pgPort} in use, using ${pgPort}`)
   if (!config.skipZeroCache && zeroPort !== config.zeroPort)
     log.debug.orez(`port ${config.zeroPort} in use, using ${zeroPort}`)
+  if (adminPort > 0 && adminPort !== config.adminPort)
+    log.debug.orez(`port ${config.adminPort} in use, using ${adminPort}`)
   config.pgPort = pgPort
   config.zeroPort = zeroPort
+  config.adminPort = adminPort
+
+  // create log store for admin dashboard
+  const logStore: LogStore | undefined =
+    adminPort > 0 ? createLogStore(config.dataDir) : undefined
 
   log.debug.orez(`data dir: ${resolve(config.dataDir)}`)
 
@@ -120,19 +129,20 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
 
   // start zero-cache
   let zeroCacheProcess: ChildProcess | null = null
+  let zeroEnv: Record<string, string> = {}
   if (!config.skipZeroCache) {
-    zeroCacheProcess = await startZeroCache(config)
+    const result = await startZeroCache(config, logStore)
+    zeroCacheProcess = result.process
+    zeroEnv = result.env
     await waitForZeroCache(config)
     log.zero(`ready ${port(config.zeroPort, 'magenta')}`)
   } else {
     log.orez('skip zero-cache')
   }
 
-  const stop = async () => {
-    log.debug.orez('shutting down')
+  const killZeroCache = async () => {
     if (zeroCacheProcess && !zeroCacheProcess.killed) {
       zeroCacheProcess.kill('SIGTERM')
-      // wait up to 3s for graceful exit, then force kill
       await new Promise<void>((r) => {
         const timeout = setTimeout(() => {
           if (zeroCacheProcess && !zeroCacheProcess.killed) {
@@ -146,6 +156,28 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
         })
       })
     }
+  }
+
+  const restartZero = async () => {
+    await killZeroCache()
+    const result = await startZeroCache(config, logStore)
+    zeroCacheProcess = result.process
+    zeroEnv = result.env
+    await waitForZeroCache(config)
+  }
+
+  const resetZero = async () => {
+    await killZeroCache()
+    cleanupStaleReplica(config)
+    const result = await startZeroCache(config, logStore)
+    zeroCacheProcess = result.process
+    zeroEnv = result.env
+    await waitForZeroCache(config)
+  }
+
+  const stop = async () => {
+    log.debug.orez('shutting down')
+    await killZeroCache()
     pgServer.close()
     await Promise.all([
       instances.postgres.close(),
@@ -155,7 +187,18 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
     log.debug.orez('stopped')
   }
 
-  return { config, stop, db, instances, pgPort: config.pgPort, zeroPort: config.zeroPort }
+  return {
+    config,
+    stop,
+    db,
+    instances,
+    pgPort: config.pgPort,
+    zeroPort: config.zeroPort,
+    logStore,
+    zeroEnv,
+    restartZero: config.skipZeroCache ? undefined : restartZero,
+    resetZero: config.skipZeroCache ? undefined : resetZero,
+  }
 }
 
 function cleanupStaleReplica(config: ZeroLiteConfig): void {
@@ -272,7 +315,10 @@ module.exports.SqliteError = SqliteError;
   return resolve(tmp, 'orez-sqlite', 'node_modules')
 }
 
-async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
+async function startZeroCache(
+  config: ZeroLiteConfig,
+  logStore?: LogStore
+): Promise<{ process: ChildProcess; env: Record<string, string> }> {
   // resolve @rocicorp/zero entry for finding zero-cache modules
   const zeroEntry = resolvePackage('@rocicorp/zero')
 
@@ -342,6 +388,7 @@ async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
     const lines = data.toString().trim().split('\n')
     for (const line of lines) {
       log.debug.zero(line)
+      logStore?.push('zero', 'info', line)
     }
   })
 
@@ -349,16 +396,18 @@ async function startZeroCache(config: ZeroLiteConfig): Promise<ChildProcess> {
     const lines = data.toString().trim().split('\n')
     for (const line of lines) {
       log.debug.zero(line)
+      logStore?.push('zero', 'error', line)
     }
   })
 
   child.on('exit', (code) => {
     if (code !== 0 && code !== null) {
       log.zero(`exited with code ${code}`)
+      logStore?.push('zero', 'error', `exited with code ${code}`)
     }
   })
 
-  return child
+  return { process: child, env }
 }
 
 async function waitForZeroCache(

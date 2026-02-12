@@ -6,6 +6,7 @@ export interface ZeroLiteConfig {
   dataDir: string
   pgPort: number
   zeroPort: number
+  adminPort: number
   pgUser: string
   pgPassword: string
   migrationsDir: string
@@ -22,6 +23,7 @@ export function getConfig(overrides: Partial<ZeroLiteConfig> = {}): ZeroLiteConf
     dataDir: overrides.dataDir || '.orez',
     pgPort: overrides.pgPort || 6434,
     zeroPort: overrides.zeroPort || 5849,
+    adminPort: overrides.adminPort || 0,
     pgUser: overrides.pgUser || 'user',
     pgPassword: overrides.pgPassword || 'password',
     migrationsDir: overrides.migrationsDir || '',

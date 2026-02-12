@@ -37,6 +37,8 @@ bunx orez
 --disable-wasm-sqlite     use native @rocicorp/zero-sqlite3 instead of wasm bedrock-sqlite
 --on-db-ready=CMD         command to run after db+proxy are ready, before zero-cache starts
 --on-healthy=CMD          command to run once all services are healthy
+--admin                   start admin dashboard (logs, env, restart/reset zero-cache)
+--admin-port=6477         admin dashboard port
 ```
 
 Ports auto-increment if already in use.

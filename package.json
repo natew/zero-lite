@@ -30,8 +30,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "vitest run --exclude src/integration/",
+    "test": "vitest run --exclude 'src/integration/' --exclude 'src/wasm-sqlite.test.ts'",
     "test:integration": "vitest run src/integration/",
+    "test:wasm": "vitest run src/wasm-sqlite.test.ts",
     "test:all": "vitest run",
     "test:watch": "vitest",
     "lint": "oxlint --import-plugin --ignore-pattern sqlite-wasm/",
