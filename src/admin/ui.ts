@@ -5,23 +5,23 @@ export function getAdminHtml(): string {
     '<head>\n' +
     '<meta charset="utf-8">\n' +
     '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
-    '<title>orez admin</title>\n' +
+    '<title>oreZ admin</title>\n' +
     '<style>\n' +
     ':root {\n' +
-    '  --bg: #0d1117;\n' +
-    '  --surface: #161b22;\n' +
-    '  --border: #30363d;\n' +
-    '  --text: #e6edf3;\n' +
-    '  --text-dim: #8b949e;\n' +
-    '  --accent: #58a6ff;\n' +
-    '  --green: #3fb950;\n' +
-    '  --yellow: #d29922;\n' +
-    '  --red: #f85149;\n' +
-    '  --purple: #bc8cff;\n' +
+    '  --bg: #000;\n' +
+    '  --surface: #0a0a0a;\n' +
+    '  --border: #222;\n' +
+    '  --text: #fff;\n' +
+    '  --text-dim: #666;\n' +
+    '  --accent: #fff;\n' +
+    '  --green: #888;\n' +
+    '  --yellow: #999;\n' +
+    '  --red: #f55;\n' +
+    '  --purple: #aaa;\n' +
     '}\n' +
     '* { margin: 0; padding: 0; box-sizing: border-box; }\n' +
     'body {\n' +
-    '  font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Cascadia Code", monospace;\n' +
+    '  font-family: -apple-system, BlinkMacSystemFont, "SF Pro", system-ui, sans-serif;\n' +
     '  background: var(--bg);\n' +
     '  color: var(--text);\n' +
     '  height: 100vh;\n' +
@@ -34,7 +34,7 @@ export function getAdminHtml(): string {
     '  align-items: center;\n' +
     '  padding: 12px 16px;\n' +
     '  background: var(--surface);\n' +
-    '  border-bottom: 1px solid var(--border);\n' +
+    '  border-bottom: 0.5px solid var(--border);\n' +
     '  gap: 12px;\n' +
     '  flex-shrink: 0;\n' +
     '}\n' +
@@ -50,7 +50,7 @@ export function getAdminHtml(): string {
     '  padding: 2px 8px;\n' +
     '  border-radius: 12px;\n' +
     '  font-size: 11px;\n' +
-    '  border: 1px solid var(--border);\n' +
+    '  border: 0.5px solid var(--border);\n' +
     '  color: var(--text-dim);\n' +
     '  gap: 4px;\n' +
     '}\n' +
@@ -65,7 +65,7 @@ export function getAdminHtml(): string {
     '  display: flex;\n' +
     '  padding: 0 16px;\n' +
     '  background: var(--surface);\n' +
-    '  border-bottom: 1px solid var(--border);\n' +
+    '  border-bottom: 0.5px solid var(--border);\n' +
     '  gap: 2px;\n' +
     '  flex-shrink: 0;\n' +
     '}\n' +
@@ -92,7 +92,7 @@ export function getAdminHtml(): string {
     '  align-items: center;\n' +
     '  padding: 8px 16px;\n' +
     '  gap: 10px;\n' +
-    '  border-bottom: 1px solid var(--border);\n' +
+    '  border-bottom: 0.5px solid var(--border);\n' +
     '  flex-shrink: 0;\n' +
     '}\n' +
     '.toolbar label {\n' +
@@ -104,7 +104,7 @@ export function getAdminHtml(): string {
     '.toolbar select {\n' +
     '  background: var(--surface);\n' +
     '  color: var(--text);\n' +
-    '  border: 1px solid var(--border);\n' +
+    '  border: 0.5px solid var(--border);\n' +
     '  border-radius: 6px;\n' +
     '  padding: 4px 8px;\n' +
     '  font-size: 12px;\n' +
@@ -115,7 +115,7 @@ export function getAdminHtml(): string {
     '.toolbar input[type="text"] {\n' +
     '  background: var(--surface);\n' +
     '  color: var(--text);\n' +
-    '  border: 1px solid var(--border);\n' +
+    '  border: 0.5px solid var(--border);\n' +
     '  border-radius: 6px;\n' +
     '  padding: 4px 8px;\n' +
     '  font-size: 12px;\n' +
@@ -137,14 +137,14 @@ export function getAdminHtml(): string {
     '  white-space: nowrap;\n' +
     '}\n' +
     '.action-btn:disabled { opacity: 0.4; cursor: not-allowed; }\n' +
-    '.action-btn.blue { color: var(--accent); border-color: #1f6feb44; }\n' +
-    '.action-btn.blue:hover:not(:disabled) { background: #1f6feb22; border-color: var(--accent); }\n' +
-    '.action-btn.orange { color: var(--yellow); border-color: #d2992244; }\n' +
-    '.action-btn.orange:hover:not(:disabled) { background: #d2992222; border-color: var(--yellow); }\n' +
-    '.action-btn.red { color: var(--red); border-color: #f8514944; }\n' +
-    '.action-btn.red:hover:not(:disabled) { background: #f8514922; border-color: var(--red); }\n' +
-    '.action-btn.gray { color: var(--text-dim); border-color: #8b949e44; }\n' +
-    '.action-btn.gray:hover:not(:disabled) { background: #8b949e22; border-color: var(--text-dim); }\n' +
+    '.action-btn.blue { color: var(--accent); border-color: #ffffff22; }\n' +
+    '.action-btn.blue:hover:not(:disabled) { background: #ffffff11; border-color: var(--accent); }\n' +
+    '.action-btn.orange { color: var(--yellow); border-color: #ffffff22; }\n' +
+    '.action-btn.orange:hover:not(:disabled) { background: #ffffff11; border-color: var(--yellow); }\n' +
+    '.action-btn.red { color: var(--red); border-color: #ff555522; }\n' +
+    '.action-btn.red:hover:not(:disabled) { background: #ff555511; border-color: var(--red); }\n' +
+    '.action-btn.gray { color: var(--text-dim); border-color: #ffffff22; }\n' +
+    '.action-btn.gray:hover:not(:disabled) { background: #ffffff11; border-color: var(--text-dim); }\n' +
     '.content-area {\n' +
     '  flex: 1;\n' +
     '  overflow: hidden;\n' +
@@ -171,7 +171,7 @@ export function getAdminHtml(): string {
     '.log-line .src.pglite { color: var(--green); }\n' +
     '.log-line .src.proxy { color: var(--yellow); }\n' +
     '.log-line .src.orez { color: var(--accent); }\n' +
-    '.log-line .src.s3 { color: #79c0ff; }\n' +
+    '.log-line .src.s3 { color: #888; }\n' +
     '.log-line.level-error .msg { color: var(--red); }\n' +
     '.log-line.level-warn .msg { color: var(--yellow); }\n' +
     '.log-line.level-info .msg { color: var(--text); }\n' +
@@ -206,7 +206,7 @@ export function getAdminHtml(): string {
     '  text-align: left;\n' +
     '  padding: 6px 12px;\n' +
     '  color: var(--text-dim);\n' +
-    '  border-bottom: 1px solid var(--border);\n' +
+    '  border-bottom: 0.5px solid var(--border);\n' +
     '  font-weight: 500;\n' +
     '  text-transform: uppercase;\n' +
     '  font-size: 10px;\n' +
@@ -214,11 +214,11 @@ export function getAdminHtml(): string {
     '}\n' +
     '.env-table td {\n' +
     '  padding: 6px 12px;\n' +
-    '  border-bottom: 1px solid #21262d;\n' +
+    '  border-bottom: 0.5px solid var(--border);\n' +
     '}\n' +
     '.env-table td:first-child { color: var(--accent); white-space: nowrap; }\n' +
     '.env-table td:last-child { color: var(--text); word-break: break-all; }\n' +
-    '.env-table tr:hover td { background: #161b22; }\n' +
+    '.env-table tr:hover td { background: #111; }\n' +
     // http view
     '.http-view {\n' +
     '  height: 100%;\n' +
@@ -231,7 +231,7 @@ export function getAdminHtml(): string {
     '  text-align: left;\n' +
     '  padding: 6px 12px;\n' +
     '  color: var(--text-dim);\n' +
-    '  border-bottom: 1px solid var(--border);\n' +
+    '  border-bottom: 0.5px solid var(--border);\n' +
     '  font-weight: 500;\n' +
     '  text-transform: uppercase;\n' +
     '  font-size: 10px;\n' +
@@ -243,17 +243,17 @@ export function getAdminHtml(): string {
     '}\n' +
     '.http-table td {\n' +
     '  padding: 5px 12px;\n' +
-    '  border-bottom: 1px solid #21262d;\n' +
+    '  border-bottom: 0.5px solid var(--border);\n' +
     '  white-space: nowrap;\n' +
     '}\n' +
     '.http-table tr.http-row { cursor: pointer; }\n' +
-    '.http-table tr.http-row:hover td { background: #161b22; }\n' +
+    '.http-table tr.http-row:hover td { background: #111; }\n' +
     '.http-table .method { font-weight: 600; }\n' +
     '.http-table .method.get { color: var(--green); }\n' +
     '.http-table .method.post { color: var(--yellow); }\n' +
     '.http-table .method.put { color: var(--accent); }\n' +
     '.http-table .method.delete { color: var(--red); }\n' +
-    '.http-table .method.patch { color: #79c0ff; }\n' +
+    '.http-table .method.patch { color: #888; }\n' +
     '.http-table .method.ws { color: var(--purple); }\n' +
     '.http-table .status.s2 { color: var(--green); }\n' +
     '.http-table .status.s3 { color: var(--yellow); }\n' +
@@ -268,8 +268,8 @@ export function getAdminHtml(): string {
     '.http-detail.open { display: table-row; }\n' +
     '.http-detail td {\n' +
     '  padding: 8px 12px 12px 24px;\n' +
-    '  background: #0c0e14;\n' +
-    '  border-bottom: 1px solid var(--border);\n' +
+    '  background: #080808;\n' +
+    '  border-bottom: 0.5px solid var(--border);\n' +
     '}\n' +
     '.http-detail .hdr-section { margin-bottom: 8px; }\n' +
     '.http-detail .hdr-title {\n' +
@@ -290,7 +290,7 @@ export function getAdminHtml(): string {
     // actions panel
     '.actions-panel {\n' +
     '  flex-shrink: 0;\n' +
-    '  border-top: 1px solid var(--border);\n' +
+    '  border-top: 0.5px solid var(--border);\n' +
     '  background: var(--surface);\n' +
     '  padding: 8px 16px;\n' +
     '}\n' +
@@ -316,7 +316,7 @@ export function getAdminHtml(): string {
     '  padding: 10px 16px;\n' +
     '  border-radius: 8px;\n' +
     '  background: var(--surface);\n' +
-    '  border: 1px solid var(--border);\n' +
+    '  border: 0.5px solid var(--border);\n' +
     '  color: var(--text);\n' +
     '  font-size: 12px;\n' +
     '  font-family: inherit;\n' +
@@ -333,7 +333,7 @@ export function getAdminHtml(): string {
     '</head>\n' +
     '<body>\n' +
     '  <div class="header">\n' +
-    '    <span class="logo">&#9670; orez admin</span>\n' +
+    '    <span class="logo">&#9670; oreZ admin</span>\n' +
     '    <div class="spacer"></div>\n' +
     '    <span class="badge"><span class="dot"></span> pg <span id="pg-port">-</span></span>\n' +
     '    <span class="badge"><span class="dot"></span> zero <span id="zero-port">-</span></span>\n' +
@@ -354,10 +354,11 @@ export function getAdminHtml(): string {
     '  <div class="toolbar" id="toolbar">\n' +
     '    <label>Level</label>\n' +
     '    <select id="level-filter">\n' +
-    '      <option value="" selected>all levels</option>\n' +
+    '      <option value="">all levels</option>\n' +
     '      <option value="error">error only</option>\n' +
     '      <option value="warn">warn+</option>\n' +
     '      <option value="info">info+</option>\n' +
+    '      <option value="debug">debug+</option>\n' +
     '    </select>\n' +
     '  </div>\n' +
     '\n' +
@@ -410,6 +411,7 @@ export function getAdminHtml(): string {
     '<script>\n' +
     'var activeSource = "";\n' +
     'var activeLevel = "";\n' +
+    'var levelSetByUser = false;\n' +
     'var lastCursor = 0;\n' +
     'var autoScroll = true;\n' +
     'var envLoaded = false;\n' +
@@ -460,6 +462,7 @@ export function getAdminHtml(): string {
     '\n' +
     'document.getElementById("level-filter").addEventListener("change", function(e) {\n' +
     '  activeLevel = e.target.value;\n' +
+    '  levelSetByUser = true;\n' +
     '  lastCursor = 0;\n' +
     '  logView.innerHTML = "";\n' +
     '  fetchLogs();\n' +
@@ -625,6 +628,11 @@ export function getAdminHtml(): string {
     '    document.querySelectorAll("[data-zero-action]").forEach(function(btn) {\n' +
     '      btn.disabled = zeroDisabled;\n' +
     '    });\n' +
+    '    // set initial level filter to match --log-level (user can change to see more)\n' +
+    '    if (!levelSetByUser && data.logLevel && activeLevel !== data.logLevel) {\n' +
+    '      activeLevel = data.logLevel;\n' +
+    '      document.getElementById("level-filter").value = data.logLevel;\n' +
+    '    }\n' +
     '  }).catch(function() {});\n' +
     '}\n' +
     '\n' +
