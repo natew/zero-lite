@@ -14,7 +14,7 @@ bunx orez
 - **Real-time replication** — changes sync instantly via pg_notify triggers, with adaptive polling as fallback; tracks configured/public tables and shard `clients` tables
 - **Auto-recovery** — finds available ports if configured ones are busy and provides reset/restart controls for zero-cache state
 - **PGlite compatibility** — rewrites unsupported queries, fakes wire protocol responses, filters unsupported column types, cleans session state between connections
-- **Admin dashboard** — live zero-cache logs, restart/reset controls, connection info (`--admin`)
+- **Admin dashboard** — live zero-cache logs, restart/reset controls, connection info (enabled by default, `--disable-admin` to turn off)
 - **Production restores** — `pg_dump`/`pg_restore` with COPY→INSERT conversion, skips unsupported extensions, handles oversized rows, auto-restarts zero-cache
 - **Zero-cache workarounds** — fixes concurrent COPY bug, disables query planner (WASM infinite loop), respects publication filtering
 - **Extensions** — pgvector and pg_trgm enabled by default
@@ -40,7 +40,7 @@ bunx orez
 --disable-wasm-sqlite     use native @rocicorp/zero-sqlite3 instead of wasm bedrock-sqlite
 --on-db-ready=CMD         command to run after db+proxy are ready, before zero-cache starts
 --on-healthy=CMD          command to run once all services are healthy
---admin                   start admin dashboard (logs, env, restart/reset zero-cache)
+--disable-admin           disable admin dashboard (enabled by default)
 --admin-port=6477         admin dashboard port
 ```
 
@@ -48,10 +48,10 @@ Ports auto-increment if already in use.
 
 ## Admin Dashboard
 
-Start the admin dashboard with `--admin`:
+The admin dashboard is enabled by default on port 6477. To disable it:
 
 ```
-bunx orez --admin
+bunx orez --disable-admin
 ```
 
 Open `http://localhost:6477` for a real-time dashboard with:
