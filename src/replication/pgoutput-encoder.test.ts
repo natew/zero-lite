@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 
-import { describe, it, expect } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 import {
   encodeBegin,
@@ -370,15 +370,19 @@ describe('pgoutput-encoder', () => {
   // this validates the fundamental contract between orez and zero-cache
   describe('roundtrip: orez encoder → zero-cache parser', () => {
     // relative path bypasses package.json exports restriction
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const parserPath = join(
       import.meta.dirname,
       '../../node_modules/@rocicorp/zero/out/zero-cache/src/services/change-source/pg/logical-replication/pgoutput-parser.js'
     )
-    const { PgoutputParser } = require(parserPath)
 
     // mock type parsers: unknown OIDs default to String (identity for text)
     const typeParsers = { getTypeParser: () => String }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let PgoutputParser: any
+    beforeAll(async () => {
+      PgoutputParser = (await import(parserPath)).PgoutputParser
+    })
 
     function makeParser() {
       return new PgoutputParser(typeParsers)
@@ -558,7 +562,7 @@ describe('pgoutput-encoder', () => {
       expect(rel.name).toBe('clients')
     })
 
-    it('LSN ordering: slot < streaming changes', () => {
+    it('LSN ordering: slot < streaming changes', async () => {
       // validates that streaming changes will be seen as "new" by zero-cache
       let testLsn = 0x1000000n
       const next = () => {
@@ -574,18 +578,16 @@ describe('pgoutput-encoder', () => {
       expect(commitLsn).toBeGreaterThan(beginLsn)
 
       // verify lexi version ordering is preserved
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const lexiPath = join(
         import.meta.dirname,
         '../../node_modules/@rocicorp/zero/out/zero-cache/src/types/lexi-version.js'
       )
-      const { versionToLexi } = require(lexiPath)
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { versionToLexi } = await import(lexiPath)
       const lsnPath = join(
         import.meta.dirname,
         '../../node_modules/@rocicorp/zero/out/zero-cache/src/services/change-source/pg/lsn.js'
       )
-      const { toBigInt: lsnToBigInt } = require(lsnPath)
+      const { toBigInt: lsnToBigInt } = await import(lsnPath)
 
       const slotHex = `00000000/${slotLsn.toString(16).padStart(8, '0')}`.toUpperCase()
       const beginHex = `00000000/${beginLsn.toString(16).padStart(8, '0')}`.toUpperCase()
