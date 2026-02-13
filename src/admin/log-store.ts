@@ -71,7 +71,12 @@ export function createLogStore(dataDir: string, writeToDisk = true): LogStore {
     }
   }
 
-  function query(opts?: { source?: string; level?: string; since?: number; limit?: number }) {
+  function query(opts?: {
+    source?: string
+    level?: string
+    since?: number
+    limit?: number
+  }) {
     let result = entries
     const limit = opts?.limit ?? 1000
 
