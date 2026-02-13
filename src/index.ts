@@ -11,8 +11,12 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 
+import {
+  createHttpLogStore,
+  startHttpProxy,
+  type HttpLogStore,
+} from './admin/http-proxy.js'
 import { createLogStore, type LogStore } from './admin/log-store.js'
-import { createHttpLogStore, startHttpProxy, type HttpLogStore } from './admin/http-proxy.js'
 import { getConfig, getConnectionString } from './config.js'
 import { log, port, setLogLevel, setLogStore } from './log.js'
 import { startPgProxy } from './pg-proxy.js'
@@ -169,9 +173,7 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
   let zeroEnv: Record<string, string> = {}
   if (!config.skipZeroCache) {
     // use internal port when http proxy is enabled
-    const zeroConfig = httpLog
-      ? { ...config, zeroPort: zeroInternalPort }
-      : config
+    const zeroConfig = httpLog ? { ...config, zeroPort: zeroInternalPort } : config
     const result = await startZeroCache(zeroConfig, logStore)
     zeroCacheProcess = result.process
     zeroEnv = result.env

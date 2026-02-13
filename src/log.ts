@@ -1,5 +1,5 @@
-import type { LogLevel } from './config.js'
 import type { LogStore } from './admin/log-store.js'
+import type { LogLevel } from './config.js'
 
 const RESET = '\x1b[0m'
 const BOLD = '\x1b[1m'

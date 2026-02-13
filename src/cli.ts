@@ -913,22 +913,30 @@ const main = defineCommand({
   },
   async run({ args }) {
     const adminPort = args.admin ? Number(args['admin-port']) : 0
-    const { config, stop, zeroEnv, logStore, httpLog, restartZero, resetZero, resetZeroFull } =
-      await startZeroLite({
-        pgPort: Number(args['pg-port']),
-        zeroPort: Number(args['zero-port']),
-        adminPort,
-        dataDir: args['data-dir'],
-        migrationsDir: args.migrations,
-        seedFile: args.seed,
-        pgUser: args['pg-user'],
-        pgPassword: args['pg-password'],
-        skipZeroCache: args['skip-zero-cache'],
-        disableWasmSqlite: args['disable-wasm-sqlite'],
-        logLevel: (args['log-level'] as 'error' | 'warn' | 'info' | 'debug') || undefined,
-        onDbReady: args['on-db-ready'] || undefined,
-        onHealthy: args['on-healthy'] || undefined,
-      })
+    const {
+      config,
+      stop,
+      zeroEnv,
+      logStore,
+      httpLog,
+      restartZero,
+      resetZero,
+      resetZeroFull,
+    } = await startZeroLite({
+      pgPort: Number(args['pg-port']),
+      zeroPort: Number(args['zero-port']),
+      adminPort,
+      dataDir: args['data-dir'],
+      migrationsDir: args.migrations,
+      seedFile: args.seed,
+      pgUser: args['pg-user'],
+      pgPassword: args['pg-password'],
+      skipZeroCache: args['skip-zero-cache'],
+      disableWasmSqlite: args['disable-wasm-sqlite'],
+      logLevel: (args['log-level'] as 'error' | 'warn' | 'info' | 'debug') || undefined,
+      onDbReady: args['on-db-ready'] || undefined,
+      onHealthy: args['on-healthy'] || undefined,
+    })
 
     let s3Server: import('node:http').Server | null = null
     if (args.s3) {

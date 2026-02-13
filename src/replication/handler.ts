@@ -311,7 +311,9 @@ export async function handleStartReplication(
       )
       tables = result.rows
       if (tables.length === 0) {
-        log.proxy(`publication "${pubName}" is empty; installing no public notify triggers`)
+        log.proxy(
+          `publication "${pubName}" is empty; installing no public notify triggers`
+        )
       }
     } else {
       const all = await db.query<{ tablename: string }>(
