@@ -15,12 +15,13 @@ const dryRun = args.includes('--dry-run')
 const patch = args.includes('--patch')
 const minor = args.includes('--minor')
 const major = args.includes('--major')
+const canary = args.includes('--canary')
 const skipTest = args.includes('--skip-test')
 const packOnly = args.includes('--pack-only')
 
-if (!patch && !minor && !major && !packOnly) {
+if (!patch && !minor && !major && !canary && !packOnly) {
   console.info(
-    'usage: bun scripts/release.ts --patch|--minor|--major [--dry-run] [--skip-test] [--pack-only]'
+    'usage: bun scripts/release.ts --patch|--minor|--major|--canary [--dry-run] [--skip-test] [--pack-only]'
   )
   process.exit(1)
 }
@@ -34,7 +35,16 @@ function run(cmd: string, opts?: { silent?: boolean; cwd?: string }) {
 }
 
 function bumpVersion(current: string): string {
-  const [curMajor, curMinor, curPatch] = current.split('.').map(Number)
+  // strip any existing prerelease tag (e.g. -canary.123)
+  const base = current.split('-')[0]
+  const [curMajor, curMinor, curPatch] = base.split('.').map(Number)
+
+  if (canary) {
+    // canary: use current version + timestamp suffix, no version bump
+    const timestamp = Date.now()
+    return `${curMajor}.${curMinor}.${curPatch}-canary.${timestamp}`
+  }
+
   return major
     ? `${curMajor + 1}.0.0`
     : minor
@@ -110,8 +120,8 @@ if (!packOnly) {
 console.info('\nbuilding...')
 run('bun run build')
 
-// bump versions in source (skip for --pack-only)
-if (!packOnly) {
+// bump versions in source (skip for --pack-only and --canary)
+if (!packOnly && !canary) {
   for (const p of packages) {
     p.pkg.version = p.next
     writeFileSync(p.pkgPath, JSON.stringify(p.pkg, null, 2) + '\n')
@@ -187,7 +197,8 @@ for (const p of packages) {
     run('npm pack', { cwd: tmpDir })
   } else {
     console.info(`\npublishing ${name}@${p.next}...`)
-    run('npm publish --access public', { cwd: tmpDir })
+    const tag = canary ? '--tag canary' : ''
+    run(`npm publish --access public ${tag}`.trim(), { cwd: tmpDir })
   }
 }
 
@@ -196,15 +207,17 @@ if (packOnly) {
   process.exit(0)
 }
 
-// git commit + tag + push
-const tag = `v${orezNext}`
-run('git add -A')
-run(`git commit -m "${tag}"`)
-run(`git tag ${tag}`)
-run('git push origin HEAD')
-run(`git push origin ${tag}`)
+// git commit + tag + push (skip for canary releases)
+if (!canary) {
+  const gitTag = `v${orezNext}`
+  run('git add -A')
+  run(`git commit -m "${gitTag}"`)
+  run(`git tag ${gitTag}`)
+  run('git push origin HEAD')
+  run(`git push origin ${gitTag}`)
+}
 
-console.info(`\nreleased:`)
+console.info(`\nreleased${canary ? ' (canary)' : ''}:`)
 for (const p of packages) {
   console.info(`  ${p.pkg.name}@${p.next}`)
 }
