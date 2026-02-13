@@ -993,6 +993,11 @@ const main = defineCommand({
 })
 
 // only run CLI when executed directly (not when imported by tests)
-if (import.meta.main) {
+// import.meta.main is Bun-specific; for Node, check if this file is the entry point
+const isMain =
+  typeof (import.meta as any).main === 'boolean'
+    ? (import.meta as any).main
+    : process.argv[1]?.endsWith('cli.js') || process.argv[1]?.endsWith('cli.ts')
+if (isMain) {
   runMain(main)
 }

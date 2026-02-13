@@ -16,10 +16,11 @@ const patch = args.includes('--patch')
 const minor = args.includes('--minor')
 const major = args.includes('--major')
 const skipTest = args.includes('--skip-test')
+const packOnly = args.includes('--pack-only')
 
-if (!patch && !minor && !major) {
+if (!patch && !minor && !major && !packOnly) {
   console.info(
-    'usage: bun scripts/release.ts --patch|--minor|--major [--dry-run] [--skip-test]'
+    'usage: bun scripts/release.ts --patch|--minor|--major [--dry-run] [--skip-test] [--pack-only]'
   )
   process.exit(1)
 }
@@ -71,24 +72,37 @@ if (existsSync(sqlitePkgPath)) {
   })
 }
 
+// for --pack-only, use current versions instead of bumping
+if (packOnly) {
+  for (const p of packages) {
+    p.next = p.pkg.version
+  }
+}
+
 // version map for resolving workspace:* at publish time
 const versionMap = new Map(packages.map((p) => [p.pkg.name, p.next]))
 
 for (const p of packages) {
-  console.info(`  ${p.pkg.name}: ${p.pkg.version} -> ${p.next}`)
+  if (packOnly) {
+    console.info(`  ${p.pkg.name}: ${p.pkg.version}`)
+  } else {
+    console.info(`  ${p.pkg.name}: ${p.pkg.version} -> ${p.next}`)
+  }
 }
 
 // check: format, lint, types, tests
-console.info('\nchecking...')
-run('bun run format')
-run('bun run format:check')
-run('bun run lint')
-run('bun run check')
-if (!skipTest) {
-  run('bun run test')
-  if (packages.length > 1) {
-    run('bun install', { cwd: sqliteWasmDir })
-    run('bun run test', { cwd: sqliteWasmDir })
+if (!packOnly) {
+  console.info('\nchecking...')
+  run('bun run format')
+  run('bun run format:check')
+  run('bun run lint')
+  run('bun run check')
+  if (!skipTest) {
+    run('bun run test')
+    if (packages.length > 1) {
+      run('bun install', { cwd: sqliteWasmDir })
+      run('bun run test', { cwd: sqliteWasmDir })
+    }
   }
 }
 
@@ -96,14 +110,16 @@ if (!skipTest) {
 console.info('\nbuilding...')
 run('bun run build')
 
-// bump versions in source
-for (const p of packages) {
-  p.pkg.version = p.next
-  writeFileSync(p.pkgPath, JSON.stringify(p.pkg, null, 2) + '\n')
-}
+// bump versions in source (skip for --pack-only)
+if (!packOnly) {
+  for (const p of packages) {
+    p.pkg.version = p.next
+    writeFileSync(p.pkgPath, JSON.stringify(p.pkg, null, 2) + '\n')
+  }
 
-// regenerate lockfile (workspace:* resolves locally, no npm needed)
-run('bun install')
+  // regenerate lockfile (workspace:* resolves locally, no npm needed)
+  run('bun install')
+}
 
 if (dryRun) {
   console.info(`\n[dry-run] would publish:`)
@@ -127,7 +143,7 @@ if (dryRun) {
 
 // publish each package from a tmp copy with workspace:* resolved
 const tmpBase = mkdtempSync(join(tmpdir(), 'orez-publish-'))
-console.info(`\npublishing from ${tmpBase}`)
+console.info(`\n${packOnly ? 'packing to' : 'publishing from'} ${tmpBase}`)
 
 for (const p of packages) {
   const name = p.pkg.name
@@ -166,8 +182,18 @@ for (const p of packages) {
   delete tmpPkg.workspaces
   writeFileSync(tmpPkgPath, JSON.stringify(tmpPkg, null, 2) + '\n')
 
-  console.info(`\npublishing ${name}@${p.next}...`)
-  run('npm publish --access public', { cwd: tmpDir })
+  if (packOnly) {
+    console.info(`\npacking ${name}@${p.next}...`)
+    run('npm pack', { cwd: tmpDir })
+  } else {
+    console.info(`\npublishing ${name}@${p.next}...`)
+    run('npm publish --access public', { cwd: tmpDir })
+  }
+}
+
+if (packOnly) {
+  console.info(`\npacked to ${tmpBase}`)
+  process.exit(0)
 }
 
 // git commit + tag + push
