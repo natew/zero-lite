@@ -992,4 +992,7 @@ const main = defineCommand({
   },
 })
 
-runMain(main)
+// only run CLI when executed directly (not when imported by tests)
+if (import.meta.main) {
+  runMain(main)
+}

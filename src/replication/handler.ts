@@ -235,7 +235,7 @@ export async function handleReplicationQuery(
 
   // wal_level check via simple query
   if (upper.includes('WAL_LEVEL') && upper.includes('CURRENT_SETTING')) {
-    return buildSimpleResponse(['walLevel', 'version'], ['logical', '160004'])
+    return buildSimpleResponse(['walLevel', 'version'], ['logical', '170004'])
   }
 
   // ALTER ROLE for replication permission

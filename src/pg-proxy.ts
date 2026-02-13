@@ -26,7 +26,7 @@ import type { PGlite } from '@electric-sql/pglite'
 
 // clean version string: strip emscripten compiler info that breaks pg_restore/pg_dump
 const PG_VERSION_STRING =
-  "'PostgreSQL 16.4 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 12.2.0, 64-bit'"
+  "'PostgreSQL 17.4 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 12.2.0, 64-bit'"
 
 // query rewrites: make pglite look like real postgres with logical replication
 const QUERY_REWRITES: Array<{ match: RegExp; replace: string }> = [
@@ -348,7 +348,7 @@ export async function startPgProxy(
 
     try {
       const connection = await fromNodeSocket(socket, {
-        serverVersion: '16.4',
+        serverVersion: '17.4',
         auth: {
           method: 'password',
           getClearTextPassword() {
