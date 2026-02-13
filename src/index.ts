@@ -7,7 +7,13 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 
@@ -101,6 +107,10 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
 
   mkdirSync(config.dataDir, { recursive: true })
 
+  // write pid file for IPC (pg_restore uses this to signal restart)
+  const pidFile = resolve(config.dataDir, 'orez.pid')
+  writeFileSync(pidFile, String(process.pid))
+
   // start pglite (separate instances for postgres, zero_cvr, zero_cdb)
   const instances = await createPGliteInstances(config)
   const db = instances.postgres
@@ -166,6 +176,15 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
     })
   }
 
+  // handle SIGUSR1 to restart zero-cache (sent by pg_restore after clearing replica)
+  if (!config.skipZeroCache) {
+    process.on('SIGUSR1', async () => {
+      log.orez('received SIGUSR1, restarting zero-cache...')
+      await restartZeroCache(false) // replica already cleared by pg_restore
+      log.zero(`ready ${port(config.zeroPort, 'magenta')}`)
+    })
+  }
+
   const killZeroCache = async () => {
     if (zeroCacheProcess && !zeroCacheProcess.killed) {
       zeroCacheProcess.kill('SIGTERM')
@@ -202,6 +221,9 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
       instances.cvr.close(),
       instances.cdb.close(),
     ])
+    try {
+      unlinkSync(pidFile)
+    } catch {}
     log.debug.orez('stopped')
   }
 
@@ -353,9 +375,13 @@ async function startZeroCache(
   const cdbUrl = getConnectionString(config, 'zero_cdb')
 
   // defaults that can be overridden by user env
+  // when admin is enabled and user hasn't set ZERO_LOG_LEVEL, capture debug
+  // logs for the admin UI while still respecting --log-level for console output
+  const zeroLogLevel =
+    config.adminPort > 0 && !process.env.ZERO_LOG_LEVEL ? 'debug' : config.logLevel
   const defaults: Record<string, string> = {
     NODE_ENV: 'development',
-    ZERO_LOG_LEVEL: config.logLevel,
+    ZERO_LOG_LEVEL: zeroLogLevel,
     ZERO_NUM_SYNC_WORKERS: '1',
     // disable query planner — it relies on scanStatus which causes infinite
     // loops with wasm sqlite and has caused freezes with native too.
@@ -402,11 +428,22 @@ async function startZeroCache(
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
+  // detect log level from zero-cache output
+  const detectLevel = (line: string, fallback: string): string => {
+    const lower = line.toLowerCase()
+    if (lower.includes('"level":"error"') || lower.includes(' error ') || lower.includes('error:'))
+      return 'error'
+    if (lower.includes('"level":"warn"') || lower.includes(' warn ') || lower.includes('warning:'))
+      return 'warn'
+    if (lower.includes('"level":"debug"') || lower.includes(' debug ')) return 'debug'
+    return fallback
+  }
+
   child.stdout?.on('data', (data: Buffer) => {
     const lines = data.toString().trim().split('\n')
     for (const line of lines) {
       log.debug.zero(line)
-      logStore?.push('zero', 'info', line)
+      logStore?.push('zero', detectLevel(line, 'info'), line)
     }
   })
 
@@ -414,7 +451,7 @@ async function startZeroCache(
     const lines = data.toString().trim().split('\n')
     for (const line of lines) {
       log.debug.zero(line)
-      logStore?.push('zero', 'error', line)
+      logStore?.push('zero', detectLevel(line, 'error'), line)
     }
   })
 

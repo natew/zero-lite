@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { defineCommand, runMain } from 'citty'
@@ -516,6 +516,7 @@ async function tryWireRestore(opts: {
   password: string
   clean: boolean
   sqlFile: string
+  dataDir: string
 }): Promise<boolean> {
   const postgres = (await import('postgres')).default
   const sql = postgres({
@@ -551,6 +552,34 @@ async function tryWireRestore(opts: {
     log.orez(
       `restored ${opts.sqlFile} via wire protocol (${executed} statements, ${skipped} skipped)`
     )
+
+    // clear zero replica so it does a fresh sync from restored upstream
+    // this is critical: without it, zero-cache will have stale table list
+    const orezDir = resolve(opts.dataDir)
+    for (const file of ['zero-replica.db', 'zero-replica.db-shm', 'zero-replica.db-wal', 'zero-replica.db-wal2']) {
+      try {
+        unlinkSync(resolve(orezDir, file))
+      } catch {}
+    }
+    // also clear CVR/CDB state
+    const { rmSync } = await import('node:fs')
+    for (const dir of ['pgdata-cvr', 'pgdata-cdb']) {
+      try {
+        rmSync(resolve(orezDir, dir), { recursive: true, force: true })
+      } catch {}
+    }
+    log.orez('cleared zero replica')
+
+    // signal the running orez process to restart zero-cache
+    const pidFile = resolve(orezDir, 'orez.pid')
+    try {
+      const pid = parseInt(readFileSync(pidFile, 'utf-8').trim(), 10)
+      process.kill(pid, 'SIGUSR1')
+      log.orez('signaled orez to restart zero-cache')
+    } catch {
+      log.orez('(restart orez to pick up changes)')
+    }
+
     return true
   } finally {
     await sql.end()
@@ -664,6 +693,7 @@ const pgRestoreCommand = defineCommand({
           password: args['pg-password'],
           clean: args.clean,
           sqlFile,
+          dataDir: args['data-dir'],
         })
         if (restored) return
         log.orez('wire protocol unavailable, falling back to direct PGlite')
