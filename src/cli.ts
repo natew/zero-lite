@@ -579,17 +579,8 @@ async function tryWireRestore(opts: {
     await sql.end({ timeout: 1 })
   }
 
-  // signal the running orez process to restart zero-cache
-  // this MUST happen after sql.end() to avoid race conditions
-  const orezDir = resolve(opts.dataDir)
-  const pidFile = resolve(orezDir, 'orez.pid')
-  try {
-    const pid = parseInt(readFileSync(pidFile, 'utf-8').trim(), 10)
-    process.kill(pid, 'SIGUSR1')
-    log.orez('signaled orez to restart zero-cache')
-  } catch {
-    log.orez('(restart orez to pick up changes)')
-  }
+  // after major restore, a full restart is more reliable than hot-reload
+  log.orez('restore complete - restart orez to pick up changes')
 
   return true
 }
