@@ -540,6 +540,22 @@ async function tryWireRestore(opts: {
   // connected — restore errors should propagate, not fall back
   log.orez(`connected via wire protocol on port ${opts.port}`)
   try {
+    const pubName = process.env.ZERO_APP_PUBLICATIONS?.trim()
+    let pubTablesBeforeRestore: string[] = []
+    if (pubName) {
+      try {
+        const existing = await sql<{ tablename: string }[]>`
+          SELECT tablename
+          FROM pg_publication_tables
+          WHERE pubname = ${pubName}
+            AND schemaname = 'public'
+        `
+        pubTablesBeforeRestore = existing.map((r) => r.tablename)
+      } catch {
+        // publication might not exist yet
+      }
+    }
+
     if (opts.clean) {
       log.orez('dropping and recreating public schema')
       await sql.unsafe('DROP SCHEMA public CASCADE')
@@ -586,17 +602,62 @@ async function tryWireRestore(opts: {
       await cdbSql.end({ timeout: 1 }).catch(() => {})
     }
 
-    const pubName = process.env.ZERO_APP_PUBLICATIONS?.trim()
     if (pubName) {
       const quoted = '"' + pubName.replace(/"/g, '""') + '"'
       await sql.unsafe(`CREATE PUBLICATION ${quoted}`).catch(() => {})
-      const pubTables = await sql<{ count: string }[]>`
+
+      // Rebuild publication membership after restore so replication resumes
+      // without requiring an app restart or migration rerun.
+      const existingPublicTables = await sql<{ tablename: string }[]>`
+        SELECT tablename
+        FROM pg_tables
+        WHERE schemaname = 'public'
+          AND tablename NOT LIKE '_zero_%'
+      `
+      const existingSet = new Set(existingPublicTables.map((r) => r.tablename))
+
+      // Prefer pre-restore publication membership; if unavailable, fall back to
+      // zero-marked tables (_0_version) from the restored schema.
+      const desired = new Set<string>(
+        pubTablesBeforeRestore.filter((t) => existingSet.has(t))
+      )
+      if (desired.size === 0) {
+        const zeroMarked = await sql<{ tablename: string }[]>`
+          SELECT DISTINCT table_name AS tablename
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND column_name = '_0_version'
+        `
+        for (const { tablename } of zeroMarked) {
+          if (existingSet.has(tablename)) desired.add(tablename)
+        }
+      }
+
+      if (desired.size > 0) {
+        const inPub = await sql<{ tablename: string }[]>`
+          SELECT tablename
+          FROM pg_publication_tables
+          WHERE pubname = ${pubName}
+            AND schemaname = 'public'
+        `
+        const inPubSet = new Set(inPub.map((r) => r.tablename))
+        const toAdd = [...desired].filter((t) => !inPubSet.has(t))
+        if (toAdd.length > 0) {
+          const tableList = toAdd
+            .map((t) => `"public"."${t.replace(/"/g, '""')}"`)
+            .join(', ')
+          await sql.unsafe(`ALTER PUBLICATION ${quoted} ADD TABLE ${tableList}`)
+          log.orez(`added ${toAdd.length} table(s) to publication "${pubName}"`)
+        }
+      }
+
+      const countRows = await sql<{ count: string }[]>`
         SELECT count(*)::text AS count
         FROM pg_publication_tables
         WHERE pubname = ${pubName}
           AND schemaname = 'public'
       `
-      const count = Number(pubTables[0]?.count || '0')
+      const count = Number(countRows[0]?.count || '0')
       log.orez(`publication "${pubName}" has ${count} table(s) after restore`)
     }
 
@@ -607,11 +668,25 @@ async function tryWireRestore(opts: {
 
   // signal orez to reset zero state (CVR/CDB + zero-cache)
   const pidFile = resolve(opts.dataDir, 'orez.pid')
+  const resetFile = resolve(opts.dataDir, 'orez.resetting')
   if (existsSync(pidFile)) {
     try {
       const pid = parseInt(readFileSync(pidFile, 'utf-8').trim(), 10)
       if (pid && pid > 0) {
+        log.orez('signaling orez to reset...')
         process.kill(pid, 'SIGUSR1')
+
+        // wait for reset to complete (orez writes .resetting file during reset)
+        const deadline = Date.now() + 120_000
+        await new Promise((r) => setTimeout(r, 500)) // give handler time to start
+        while (existsSync(resetFile) && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 500))
+        }
+        if (existsSync(resetFile)) {
+          log.orez('warning: reset timed out, continuing anyway')
+        } else {
+          log.orez('reset complete')
+        }
       }
     } catch {}
   }

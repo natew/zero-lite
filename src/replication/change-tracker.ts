@@ -76,8 +76,8 @@ function quoteIdent(name: string): string {
 }
 
 async function installTriggersOnAllTables(db: PGlite): Promise<void> {
-  // If a publication is configured, prefer it. If not configured (or temporarily empty),
-  // fall back to all eligible public tables so orez stays automatic in dev flows.
+  // If a publication is configured, respect it strictly. This avoids accidentally
+  // streaming private tables when publication membership is temporarily empty.
   const pubName = process.env.ZERO_APP_PUBLICATIONS?.trim()
   let tables: { tablename: string }[]
   if (pubName) {
@@ -92,16 +92,7 @@ async function installTriggersOnAllTables(db: PGlite): Promise<void> {
     if (tables.length > 0) {
       log.debug.pglite(`using publication "${pubName}" (${tables.length} tables)`)
     } else {
-      log.pglite(
-        `publication "${pubName}" is empty; falling back to all public tables`
-      )
-      const all = await db.query<{ tablename: string }>(
-        `SELECT tablename FROM pg_tables
-         WHERE schemaname = 'public'
-           AND tablename NOT IN ('migrations', '_zero_changes')
-           AND tablename NOT LIKE '_zero_%'`
-      )
-      tables = all.rows
+      log.pglite(`publication "${pubName}" is empty; installing no public table triggers`)
     }
   } else {
     const all = await db.query<{ tablename: string }>(

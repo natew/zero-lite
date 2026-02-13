@@ -300,7 +300,7 @@ export async function handleStartReplication(
   `)
 
     // install notify triggers from configured publication when available.
-    // if publication is missing/empty, fall back to all eligible public tables.
+    // when publication is configured but empty, install none to preserve scope.
     const pubName = process.env.ZERO_APP_PUBLICATIONS?.trim()
     let tables: { tablename: string }[]
     if (pubName) {
@@ -311,14 +311,7 @@ export async function handleStartReplication(
       )
       tables = result.rows
       if (tables.length === 0) {
-        log.proxy(`publication "${pubName}" is empty; falling back to all public tables`)
-        const all = await db.query<{ tablename: string }>(
-          `SELECT tablename FROM pg_tables
-           WHERE schemaname = 'public'
-             AND tablename NOT IN ('migrations', '_zero_changes')
-             AND tablename NOT LIKE '_zero_%'`
-        )
-        tables = all.rows
+        log.proxy(`publication "${pubName}" is empty; installing no public notify triggers`)
       }
     } else {
       const all = await db.query<{ tablename: string }>(

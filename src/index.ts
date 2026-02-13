@@ -234,12 +234,15 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
   //   'cache-only' - deletes replica file only (fast, for minor sync issues)
   //   'full' - deletes CVR/CDB + replica and recreates instances (for schema changes)
   let resetInProgress = false
+  const resetFile = resolve(config.dataDir, 'orez.resetting')
   const resetZeroState = async (mode: 'cache-only' | 'full'): Promise<void> => {
     if (resetInProgress) {
       log.orez('reset already in progress, skipping')
       return
     }
     resetInProgress = true
+    // write marker file so pg_restore can wait for reset to complete
+    writeFileSync(resetFile, String(Date.now()))
 
     try {
       log.orez(`resetting zero state (${mode})...`)
@@ -294,6 +297,25 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
       cleanupStaleReplica(config)
       log.orez('replica cleaned up')
 
+      // re-run on-db-ready hook after full reset (re-runs migrations, syncs publication)
+      if (mode === 'full' && config.onDbReady) {
+        log.orez('re-running on-db-ready...')
+        const upstreamUrl = getConnectionString(config, 'postgres')
+        const cvrUrl = getConnectionString(config, 'zero_cvr')
+        const cdbUrl = getConnectionString(config, 'zero_cdb')
+        await runHook(config.onDbReady, 'on-db-ready', {
+          ZERO_UPSTREAM_DB: upstreamUrl,
+          ZERO_CVR_DB: cvrUrl,
+          ZERO_CHANGE_DB: cdbUrl,
+          DATABASE_URL: upstreamUrl,
+          OREZ_PG_PORT: String(config.pgPort),
+        })
+
+        // re-install change tracking on any tables created/modified by on-db-ready
+        log.debug.orez('re-installing change tracking after on-db-ready')
+        await installChangeTracking(db)
+      }
+
       // restart zero-cache
       log.orez('starting zero-cache...')
       // use internal port when http proxy is enabled
@@ -310,6 +332,10 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
       throw err
     } finally {
       resetInProgress = false
+      // remove marker file so pg_restore knows we're done
+      try {
+        unlinkSync(resetFile)
+      } catch {}
     }
   }
 

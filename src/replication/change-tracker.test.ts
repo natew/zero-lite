@@ -144,6 +144,23 @@ describe('change-tracker', () => {
     expect(internalChanges).toHaveLength(0)
   })
 
+  it('respects empty configured publication (tracks no public tables)', async () => {
+    const prev = process.env.ZERO_APP_PUBLICATIONS
+    process.env.ZERO_APP_PUBLICATIONS = 'zero_scope'
+    try {
+      await db.exec(`CREATE PUBLICATION "zero_scope"`)
+      await installChangeTracking(db) // reinstall picks up publication scope
+      await db.exec(`TRUNCATE public._zero_changes`)
+
+      await db.exec(`INSERT INTO public.items (name, value) VALUES ('x', 1)`)
+      const changes = await getChangesSince(db, 0)
+      expect(changes).toHaveLength(0)
+    } finally {
+      if (prev === undefined) delete process.env.ZERO_APP_PUBLICATIONS
+      else process.env.ZERO_APP_PUBLICATIONS = prev
+    }
+  })
+
   it('handles NULL column values', async () => {
     await db.exec(`INSERT INTO public.items (name, value) VALUES ('nulltest', NULL)`)
 
