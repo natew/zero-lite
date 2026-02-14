@@ -29,20 +29,28 @@ export function createLogStore(dataDir: string, writeToDisk = true): LogStore {
   let nextId = 1
 
   const logsDir = join(dataDir, 'logs')
-  const logFile = join(logsDir, 'orez.log')
-  const backupFile = join(logsDir, 'orez.log.1')
 
   if (writeToDisk) {
     mkdirSync(logsDir, { recursive: true })
   }
 
-  function rotateIfNeeded() {
+  // track file sizes to rotate per-source
+  const fileSizes: Record<string, number> = {}
+
+  function getLogFile(source: string): string {
+    return join(logsDir, `${source}.log`)
+  }
+
+  function rotateIfNeeded(source: string) {
     if (!writeToDisk) return
     try {
+      const logFile = getLogFile(source)
       if (!existsSync(logFile)) return
       const stat = statSync(logFile)
+      fileSizes[source] = stat.size
       if (stat.size > MAX_FILE_SIZE) {
-        renameSync(logFile, backupFile)
+        renameSync(logFile, logFile + '.1')
+        fileSizes[source] = 0
       }
     } catch {}
   }
@@ -62,11 +70,13 @@ export function createLogStore(dataDir: string, writeToDisk = true): LogStore {
     if (writeToDisk) {
       try {
         const ts = new Date(entry.ts).toISOString()
-        appendFileSync(
-          logFile,
-          '[' + ts + '] [' + source + '] [' + level + '] ' + entry.msg + '\n'
-        )
-        rotateIfNeeded()
+        const logFile = getLogFile(source)
+        appendFileSync(logFile, `[${ts}] [${level}] ${entry.msg}\n`)
+        // check rotation every ~100 writes to this source
+        fileSizes[source] = (fileSizes[source] || 0) + entry.msg.length + 50
+        if (fileSizes[source] > MAX_FILE_SIZE) {
+          rotateIfNeeded(source)
+        }
       } catch {}
     }
   }
