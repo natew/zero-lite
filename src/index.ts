@@ -75,6 +75,62 @@ async function runHook(
   })
 }
 
+function getManagedPublicationConfig(): { names: string[]; managedByOrez: boolean } {
+  const existing = process.env.ZERO_APP_PUBLICATIONS?.trim()
+  if (existing) {
+    const names = existing
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    return { names, managedByOrez: false }
+  }
+
+  const appId = (process.env.ZERO_APP_ID || 'zero').trim() || 'zero'
+  const fallback = `orez_${appId}_public`
+  process.env.ZERO_APP_PUBLICATIONS = fallback
+  return { names: [fallback], managedByOrez: true }
+}
+
+async function syncManagedPublications(
+  db: PGlite,
+  names: string[],
+  managedByOrez: boolean
+): Promise<void> {
+  if (!managedByOrez || names.length === 0) return
+
+  const tables = await db.query<{ tablename: string }>(
+    `SELECT tablename
+     FROM pg_tables
+     WHERE schemaname = 'public'
+       AND tablename NOT LIKE '_zero_%'`
+  )
+  const publicTables = tables.rows
+    .map((r) => r.tablename)
+    .filter((t) => !t.startsWith('_'))
+
+  for (const pub of names) {
+    const quotedPub = '"' + pub.replace(/"/g, '""') + '"'
+    await db.exec(`CREATE PUBLICATION ${quotedPub}`).catch(() => {})
+
+    if (publicTables.length === 0) continue
+    const inPub = await db.query<{ tablename: string }>(
+      `SELECT tablename
+       FROM pg_publication_tables
+       WHERE pubname = $1
+         AND schemaname = 'public'`,
+      [pub]
+    )
+    const inPubSet = new Set(inPub.rows.map((r) => r.tablename))
+    const toAdd = publicTables.filter((t) => !inPubSet.has(t))
+    if (toAdd.length === 0) continue
+    const tableList = toAdd
+      .map((t) => `"public"."${t.replace(/"/g, '""')}"`)
+      .join(', ')
+    await db.exec(`ALTER PUBLICATION ${quotedPub} ADD TABLE ${tableList}`)
+    log.debug.orez(`added ${toAdd.length} table(s) to publication "${pub}"`)
+  }
+}
+
 // resolvePackage moved to sqlite-mode/resolve-mode.ts
 import { resolvePackage } from './sqlite-mode/resolve-mode.js'
 
@@ -112,18 +168,20 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
   log.debug.orez(`data dir: ${resolve(config.dataDir)}`)
 
   // resolve sqlite mode config early (used for shim application and cleanup)
-  // requested wasm can fall back to native if required packages are missing.
-  let sqliteMode = resolveSqliteMode(config.disableWasmSqlite)
-  let sqliteModeConfig = resolveSqliteModeConfig(config.disableWasmSqlite)
+  // auto-detects native if available, falls back to wasm
+  let sqliteMode = resolveSqliteMode(config.disableWasmSqlite, config.forceWasmSqlite)
+  let sqliteModeConfig = resolveSqliteModeConfig(
+    config.disableWasmSqlite,
+    config.forceWasmSqlite
+  )
   if (sqliteMode === 'wasm' && !sqliteModeConfig) {
     log.orez(
-      'warning: wasm sqlite requested but dependencies are missing, falling back to native sqlite'
+      'warning: wasm sqlite requested but dependencies are missing, falling back to native'
     )
     sqliteMode = 'native'
     config.disableWasmSqlite = true
-    sqliteModeConfig = resolveSqliteModeConfig(true)
+    sqliteModeConfig = resolveSqliteModeConfig(true, false)
   }
-  log.orez(`sqlite: ${sqliteMode}`)
 
   mkdirSync(config.dataDir, { recursive: true })
 
@@ -140,9 +198,14 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
   // start pglite (separate instances for postgres, zero_cvr, zero_cdb)
   const instances = await createPGliteInstances(config)
   const db = instances.postgres
+  const managedPub = getManagedPublicationConfig()
+  if (managedPub.managedByOrez) {
+    log.debug.orez(`using managed publication: ${managedPub.names.join(', ')}`)
+  }
 
   // run migrations (on postgres instance only)
   const migrationsApplied = await runMigrations(db, config)
+  await syncManagedPublications(db, managedPub.names, managedPub.managedByOrez)
 
   // install change tracking (on postgres instance only)
   log.debug.orez('installing change tracking')
@@ -173,6 +236,7 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
     })
 
     // re-install change tracking on tables created by on-db-ready
+    await syncManagedPublications(db, managedPub.names, managedPub.managedByOrez)
     log.debug.orez('re-installing change tracking after on-db-ready')
     await installChangeTracking(db)
   }
@@ -378,6 +442,7 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
 
       // always re-install change tracking after a full reset so public table
       // triggers reflect any schema changes introduced by restore.
+      await syncManagedPublications(db, managedPub.names, managedPub.managedByOrez)
       log.debug.orez('re-installing change tracking after full reset')
       await installChangeTracking(db)
 

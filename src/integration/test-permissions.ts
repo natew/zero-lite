@@ -84,6 +84,42 @@ export async function installAllowAllPermissions(
   }
 }
 
+export async function hasNonNullPermissions(db: DbLike): Promise<boolean> {
+  const schemas = await findPermissionsSchemas(db)
+  for (const schema of schemas) {
+    const quotedSchema = '"' + schema.replace(/"/g, '""') + '"'
+    const result = await db.query<{ has_permissions: boolean }>(
+      `SELECT (permissions IS NOT NULL) AS has_permissions
+       FROM ${quotedSchema}.permissions
+       WHERE lock = true
+       LIMIT 1`
+    )
+    if (result.rows[0]?.has_permissions) return true
+  }
+  return false
+}
+
+export async function ensureTablesInPublications(
+  db: DbLike,
+  tables: string[]
+): Promise<void> {
+  const pubs = await db.query<{ pubname: string }>(
+    `SELECT pubname
+     FROM pg_publication
+     WHERE pubname NOT LIKE '%metadata%'
+     ORDER BY pubname`
+  )
+  for (const { pubname } of pubs.rows) {
+    const quotedPub = '"' + pubname.replace(/"/g, '""') + '"'
+    for (const table of tables) {
+      const quotedTable = '"' + table.replace(/"/g, '""') + '"'
+      await db
+        .exec(`ALTER PUBLICATION ${quotedPub} ADD TABLE "public".${quotedTable}`)
+        .catch(() => {})
+    }
+  }
+}
+
 function parsePermissions(value: unknown): { tables?: Record<string, unknown> } {
   if (!value) return {}
   if (typeof value === 'string') {

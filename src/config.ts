@@ -16,6 +16,7 @@ export interface ZeroLiteConfig {
   seedFile: string
   skipZeroCache: boolean
   disableWasmSqlite: boolean
+  forceWasmSqlite: boolean
   logLevel: LogLevel
   pgliteOptions: Partial<PGliteOptions>
   // lifecycle hooks
@@ -35,6 +36,7 @@ export function getConfig(overrides: Partial<ZeroLiteConfig> = {}): ZeroLiteConf
     seedFile: overrides.seedFile || 'src/database/seed.sql',
     skipZeroCache: overrides.skipZeroCache || false,
     disableWasmSqlite: overrides.disableWasmSqlite ?? false,
+    forceWasmSqlite: overrides.forceWasmSqlite ?? false,
     logLevel: overrides.logLevel || 'warn',
     pgliteOptions: overrides.pgliteOptions || {},
     onDbReady: overrides.onDbReady,

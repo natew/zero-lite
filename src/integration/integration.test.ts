@@ -12,11 +12,27 @@ import WebSocket from 'ws'
 
 import { startZeroLite } from '../index.js'
 import { installChangeTracking } from '../replication/change-tracker.js'
-import { installAllowAllPermissions } from './test-permissions.js'
+import {
+  ensureTablesInPublications,
+  hasNonNullPermissions,
+  installAllowAllPermissions,
+} from './test-permissions.js'
 
 import type { PGlite } from '@electric-sql/pglite'
 
 const SYNC_PROTOCOL_VERSION = 45
+const CLIENT_SCHEMA = {
+  tables: {
+    foo: {
+      columns: {
+        id: { type: 'string' },
+        value: { type: 'string' },
+        num: { type: 'number' },
+      },
+      primaryKey: ['id'],
+    },
+  },
+}
 
 function encodeSecProtocols(
   initConnectionMessage: unknown,
@@ -70,6 +86,7 @@ describe('orez integration', { timeout: 120000 }, () => {
   let pgPort: number
   let shutdown: () => Promise<void>
   let restartZero: (() => Promise<void>) | undefined
+  let resetZeroFull: (() => Promise<void>) | undefined
   let dataDir: string
 
   beforeAll(async () => {
@@ -91,6 +108,7 @@ describe('orez integration', { timeout: 120000 }, () => {
     pgPort = result.pgPort
     shutdown = result.stop
     restartZero = result.restartZero
+    resetZeroFull = result.resetZeroFull
 
     console.log(`[test] orez started, creating tables`)
 
@@ -107,6 +125,7 @@ describe('orez integration', { timeout: 120000 }, () => {
         foo_id TEXT
       );
     `)
+    await ensureTablesInPublications(db, ['foo', 'bar'])
     const pubName = process.env.ZERO_APP_PUBLICATIONS?.trim()
     if (pubName) {
       const quotedPub = '"' + pubName.replace(/"/g, '""') + '"'
@@ -119,10 +138,30 @@ describe('orez integration', { timeout: 120000 }, () => {
       await installChangeTracking(db)
     }
     await installAllowAllPermissions(db, ['foo', 'bar'])
-    if (restartZero) {
+    expect(await hasNonNullPermissions(db)).toBe(true)
+    if (resetZeroFull) {
+      await resetZeroFull()
+    } else if (restartZero) {
       await restartZero()
     }
-    await ensureClientGroup(zeroPort, 'test-cg')
+    const pubNameAfterReset = process.env.ZERO_APP_PUBLICATIONS?.trim()
+    if (pubNameAfterReset) {
+      const pubRows = await db.query<{ tablename: string }>(
+        `SELECT tablename
+         FROM pg_publication_tables
+         WHERE pubname = $1
+           AND schemaname = 'public'`,
+        [pubNameAfterReset]
+      )
+      expect(pubRows.rows.map((r) => r.tablename)).toEqual(
+        expect.arrayContaining(['foo', 'bar'])
+      )
+      const shardCfg = await db.query<{ publications: string[] }>(
+        `SELECT publications FROM "zero_0"."shardConfig" WHERE lock = true`
+      )
+      expect(shardCfg.rows[0]?.publications || []).toContain(pubNameAfterReset)
+    }
+    expect(await hasNonNullPermissions(db)).toBe(true)
 
     console.log(`[test] tables created, waiting for zero-cache`)
     // wait for zero-cache to be ready
@@ -360,13 +399,14 @@ describe('orez integration', { timeout: 120000 }, () => {
   ): WebSocket {
     const secProtocol = encodeSecProtocols(
       [
-        'initConnection',
-        {
-          desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
-        },
-      ],
-      undefined
-    )
+      'initConnection',
+      {
+        desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
+        clientSchema: CLIENT_SCHEMA,
+      },
+    ],
+    undefined
+  )
     const ws = new WebSocket(
       `ws://localhost:${port}/sync/v${SYNC_PROTOCOL_VERSION}/connect` +
         `?clientGroupID=test-cg&clientID=test-client&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
@@ -456,41 +496,4 @@ async function waitForZero(port: number, timeoutMs = 30000) {
     await new Promise((r) => setTimeout(r, 500))
   }
   throw new Error(`zero-cache not ready on port ${port} after ${timeoutMs}ms`)
-}
-
-async function ensureClientGroup(port: number, clientGroupID: string): Promise<void> {
-  const secProtocol = encodeSecProtocols(
-    ['initConnection', { desiredQueriesPatch: [], clientSchema: { tables: {} } }],
-    undefined
-  )
-  await new Promise<void>((resolve, reject) => {
-    const ws = new WebSocket(
-      `ws://localhost:${port}/sync/v${SYNC_PROTOCOL_VERSION}/connect` +
-        `?clientGroupID=${clientGroupID}&clientID=test-client&wsid=ws-bootstrap&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
-      secProtocol
-    )
-
-    const timer = setTimeout(() => {
-      try {
-        ws.close()
-      } catch {}
-      reject(new Error('client-group bootstrap timeout'))
-    }, 7000)
-
-    ws.once('message', (data) => {
-      clearTimeout(timer)
-      const msg = JSON.parse(data.toString())
-      const isError = Array.isArray(msg) && msg[0] === 'error'
-      ws.close()
-      if (isError) {
-        reject(new Error(`client-group bootstrap failed: ${JSON.stringify(msg)}`))
-      } else {
-        resolve()
-      }
-    })
-    ws.once('error', (err) => {
-      clearTimeout(timer)
-      reject(err)
-    })
-  })
 }

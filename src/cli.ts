@@ -930,7 +930,12 @@ const main = defineCommand({
     },
     'disable-wasm-sqlite': {
       type: 'boolean',
-      description: 'use native @rocicorp/zero-sqlite3 instead of wasm bedrock-sqlite',
+      description: 'force native @rocicorp/zero-sqlite3 (fails if not available)',
+      default: false,
+    },
+    'force-wasm-sqlite': {
+      type: 'boolean',
+      description: 'force wasm bedrock-sqlite even if native is available',
       default: false,
     },
     'on-db-ready': {
@@ -982,6 +987,7 @@ const main = defineCommand({
       pgPassword: args['pg-password'],
       skipZeroCache: args['skip-zero-cache'],
       disableWasmSqlite: args['disable-wasm-sqlite'],
+      forceWasmSqlite: args['force-wasm-sqlite'],
       logLevel: (args['log-level'] as 'error' | 'warn' | 'info' | 'debug') || undefined,
       onDbReady: args['on-db-ready'] || undefined,
       onHealthy: args['on-healthy'] || undefined,

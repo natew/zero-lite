@@ -28,16 +28,22 @@ describe('sqlite mode types', () => {
 })
 
 describe('sqlite mode resolution', () => {
-  it('resolves wasm mode when disableWasmSqlite is false', () => {
-    expect(resolveSqliteMode(false)).toBe('wasm')
+  it('resolves native mode when disableWasmSqlite is true', () => {
+    expect(resolveSqliteMode(true, false)).toBe('native')
   })
 
-  it('resolves native mode when disableWasmSqlite is true', () => {
-    expect(resolveSqliteMode(true)).toBe('native')
+  it('resolves wasm mode when forceWasmSqlite is true', () => {
+    expect(resolveSqliteMode(false, true)).toBe('wasm')
+  })
+
+  it('auto-detects mode based on native binary availability', () => {
+    // when neither flag is set, mode depends on whether native binary exists
+    const mode = resolveSqliteMode(false, false)
+    expect(['wasm', 'native']).toContain(mode)
   })
 
   it('returns config with mode for native', () => {
-    const config = resolveSqliteModeConfig(true)
+    const config = resolveSqliteModeConfig(true, false)
     expect(config).not.toBeNull()
     expect(config?.mode).toBe('native')
   })

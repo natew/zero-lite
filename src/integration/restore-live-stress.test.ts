@@ -18,11 +18,26 @@ import WebSocket from 'ws'
 import { execDumpFile } from '../cli.js'
 import { startZeroLite } from '../index.js'
 import { installChangeTracking } from '../replication/change-tracker.js'
-import { installAllowAllPermissions } from './test-permissions.js'
+import {
+  ensureTablesInPublications,
+  hasNonNullPermissions,
+  installAllowAllPermissions,
+} from './test-permissions.js'
 
 import type { PGlite } from '@electric-sql/pglite'
 
 const SYNC_PROTOCOL_VERSION = 45
+const LIVE_CLIENT_SCHEMA = {
+  tables: {
+    restore_live_probe: {
+      columns: {
+        id: { type: 'string' },
+        value: { type: 'string' },
+      },
+      primaryKey: ['id'],
+    },
+  },
+}
 
 function encodeSecProtocols(
   initConnectionMessage: unknown,
@@ -128,78 +143,52 @@ function connectAndSubscribe(
   query: Record<string, unknown>
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ts = Date.now()
-    const clientGroupID = `restore-live-cg-${ts}`
-    const urlBase =
+    const initConnectionMessage: [string, Record<string, unknown>] = [
+      'initConnection',
+      {
+        desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
+        clientSchema: LIVE_CLIENT_SCHEMA,
+      },
+    ]
+    const secProtocol = encodeSecProtocols(initConnectionMessage, undefined)
+    const ws = new WebSocket(
       `ws://127.0.0.1:${port}/sync/v${SYNC_PROTOCOL_VERSION}/connect` +
-      `?clientGroupID=${clientGroupID}` +
-      `&clientID=restore-live-client` +
-      `&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`
-
-    const bootstrapProtocol = encodeSecProtocols(
-      ['initConnection', { desiredQueriesPatch: [] }],
-      undefined
+        `?clientGroupID=restore-live-cg-${Date.now()}` +
+        `&clientID=restore-live-client` +
+        `&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
+      secProtocol
     )
-    const bootstrapWs = new WebSocket(`${urlBase}&wsid=bootstrap`, bootstrapProtocol)
 
-    const fail = (err: unknown) => {
-      clearTimeout(bootstrapTimer)
+    let settled = false
+    const failTimer = setTimeout(() => {
+      if (settled) return
+      settled = true
       try {
-        bootstrapWs.close()
+        ws.close()
       } catch {}
-      reject(err)
-    }
-
-    const bootstrapTimer = setTimeout(() => {
-      fail(new Error('bootstrap websocket timeout'))
+      reject(new Error('websocket connected but no downstream messages'))
     }, 7000)
-    bootstrapWs.once('error', fail)
-    bootstrapWs.once('message', () => {
-      clearTimeout(bootstrapTimer)
-      try {
-        bootstrapWs.close()
-      } catch {}
 
-      const initConnectionMessage: [string, Record<string, unknown>] = [
-        'initConnection',
-        {
-          desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
-        },
-      ]
-      const secProtocol = encodeSecProtocols(initConnectionMessage, undefined)
-      const ws = new WebSocket(`${urlBase}&wsid=ws1`, secProtocol)
-
-      let settled = false
-      const failTimer = setTimeout(() => {
-        if (settled) return
-        settled = true
-        try {
-          ws.close()
-        } catch {}
-        reject(new Error('websocket connected but no downstream messages'))
-      }, 7000)
-
-      ws.on('message', (data) => {
-        const msg = JSON.parse(data.toString())
-        downstream.enqueue(msg)
-        if (!settled) {
-          settled = true
-          clearTimeout(failTimer)
-          resolve(ws)
-        }
-      })
-      ws.once('error', (err) => {
-        if (settled) return
+    ws.on('message', (data) => {
+      const msg = JSON.parse(data.toString())
+      downstream.enqueue(msg)
+      if (!settled) {
         settled = true
         clearTimeout(failTimer)
-        reject(err)
-      })
-      ws.once('close', () => {
-        if (settled) return
-        settled = true
-        clearTimeout(failTimer)
-        reject(new Error('websocket closed before initial downstream message'))
-      })
+        resolve(ws)
+      }
+    })
+    ws.once('error', (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(failTimer)
+      reject(err)
+    })
+    ws.once('close', () => {
+      if (settled) return
+      settled = true
+      clearTimeout(failTimer)
+      reject(new Error('websocket closed before initial downstream message'))
     })
   })
 }
@@ -299,6 +288,7 @@ describe('live restore stress with connected frontend', { timeout: 360_000 }, ()
   let zeroPort: number
   let shutdown: () => Promise<void>
   let restartZero: (() => Promise<void>) | undefined
+  let resetZeroFull: (() => Promise<void>) | undefined
   let dataDir: string
   let dumpFile: string
 
@@ -330,6 +320,7 @@ describe('live restore stress with connected frontend', { timeout: 360_000 }, ()
     zeroPort = started.zeroPort
     shutdown = started.stop
     restartZero = started.restartZero
+    resetZeroFull = started.resetZeroFull
     await waitForZero(zeroPort, 90_000)
   }, 180_000)
 
@@ -352,8 +343,13 @@ describe('live restore stress with connected frontend', { timeout: 360_000 }, ()
         value TEXT NOT NULL
       )
     `)
+    await ensureTablesInPublications(db, ['restore_live_probe'])
     await installAllowAllPermissions(db, ['restore_live_probe'])
-    if (restartZero) {
+    expect(await hasNonNullPermissions(db)).toBe(true)
+    if (resetZeroFull) {
+      await resetZeroFull()
+      await waitForZero(zeroPort, 90_000)
+    } else if (restartZero) {
       await restartZero()
       await waitForZero(zeroPort, 60_000)
     }

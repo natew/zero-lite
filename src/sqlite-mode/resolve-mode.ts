@@ -1,9 +1,16 @@
 /**
  * mode resolution - canonical place to determine sqlite mode from config/env
+ *
+ * priority:
+ * 1. explicit --disable-wasm-sqlite flag → native
+ * 2. explicit --force-wasm-sqlite flag → wasm
+ * 3. native binary available → native (auto-detect)
+ * 4. fallback → wasm
  */
 
 import { createRequire } from 'node:module'
 
+import { inspectNativeSqliteBinary } from './native-binary.js'
 import type { SqliteMode, SqliteModeConfig } from './types.js'
 
 /**
@@ -25,9 +32,26 @@ export function resolvePackage(pkg: string): string {
 /**
  * resolve sqlite mode from config
  * single source of truth for mode selection
+ *
+ * @param disableWasmSqlite - explicit flag to force native mode
+ * @param forceWasmSqlite - explicit flag to force wasm mode (overrides auto-detect)
  */
-export function resolveSqliteMode(disableWasmSqlite: boolean): SqliteMode {
-  return disableWasmSqlite ? 'native' : 'wasm'
+export function resolveSqliteMode(
+  disableWasmSqlite: boolean,
+  forceWasmSqlite: boolean = false
+): SqliteMode {
+  // explicit native request
+  if (disableWasmSqlite) return 'native'
+
+  // explicit wasm request
+  if (forceWasmSqlite) return 'wasm'
+
+  // auto-detect: prefer native if binary is available
+  const nativeCheck = inspectNativeSqliteBinary()
+  if (nativeCheck.found) return 'native'
+
+  // fallback to wasm
+  return 'wasm'
 }
 
 /**
@@ -35,9 +59,10 @@ export function resolveSqliteMode(disableWasmSqlite: boolean): SqliteMode {
  * returns null if required packages aren't installed
  */
 export function resolveSqliteModeConfig(
-  disableWasmSqlite: boolean
+  disableWasmSqlite: boolean,
+  forceWasmSqlite: boolean = false
 ): SqliteModeConfig | null {
-  const mode = resolveSqliteMode(disableWasmSqlite)
+  const mode = resolveSqliteMode(disableWasmSqlite, forceWasmSqlite)
   const zeroSqlitePath = resolvePackage('@rocicorp/zero-sqlite3') || undefined
 
   // native mode may still need zero-sqlite3 path for restoring from a prior shim

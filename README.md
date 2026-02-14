@@ -59,7 +59,8 @@ bunx orez
 --log-level=warn          error, warn, info, debug
 --s3                      also start a local s3-compatible server
 --s3-port=9200            s3 server port
---disable-wasm-sqlite     use native @rocicorp/zero-sqlite3 instead of wasm
+--force-wasm-sqlite       force wasm sqlite even if native is available
+--disable-wasm-sqlite     force native sqlite (fail if not available)
 --on-db-ready=CMD         command to run after db+proxy ready, before zero-cache
 --on-healthy=CMD          command to run once all services healthy
 --disable-admin           disable admin dashboard

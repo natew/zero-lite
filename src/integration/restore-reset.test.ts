@@ -18,10 +18,25 @@ import WebSocket from 'ws'
 
 import { execDumpFile } from '../cli.js'
 import { startZeroLite } from '../index.js'
-import { installAllowAllPermissions } from './test-permissions.js'
+import {
+  ensureTablesInPublications,
+  hasNonNullPermissions,
+  installAllowAllPermissions,
+} from './test-permissions.js'
 
 // zero-cache protocol version (from @rocicorp/zero/out/zero-protocol/src/protocol-version.js)
 const PROTOCOL_VERSION = 45
+const RESET_CLIENT_SCHEMA = {
+  tables: {
+    reset_probe: {
+      columns: {
+        id: { type: 'string' },
+        value: { type: 'string' },
+      },
+      primaryKey: ['id'],
+    },
+  },
+}
 
 // encode initConnection message for sec-websocket-protocol header
 // matches zero-protocol's encodeSecProtocols implementation
@@ -117,6 +132,7 @@ describe('restore/reset integration regression', { timeout: 150_000 }, () => {
   let zeroPort: number
   let shutdown: () => Promise<void>
   let restartZero: (() => Promise<void>) | undefined
+  let resetZeroFull: (() => Promise<void>) | undefined
   let dataDir: string
   let dumpFile: string
   let dumpFileIsTemp = false
@@ -143,6 +159,7 @@ describe('restore/reset integration regression', { timeout: 150_000 }, () => {
     zeroPort = started.zeroPort
     shutdown = started.stop
     restartZero = started.restartZero
+    resetZeroFull = started.resetZeroFull
 
     await waitForZero(zeroPort, 90_000)
   }, 120_000)
@@ -205,6 +222,7 @@ describe('restore/reset integration regression', { timeout: 150_000 }, () => {
         AFTER INSERT OR UPDATE OR DELETE ON public.reset_probe
         FOR EACH STATEMENT EXECUTE FUNCTION public._zero_notify_change();
     `)
+    await ensureTablesInPublications(db, ['reset_probe'])
     const pubName = process.env.ZERO_APP_PUBLICATIONS?.trim()
     if (pubName) {
       const quotedPub = '"' + pubName.replace(/"/g, '""') + '"'
@@ -213,7 +231,11 @@ describe('restore/reset integration regression', { timeout: 150_000 }, () => {
         .catch(() => {})
     }
     await installAllowAllPermissions(db, ['reset_probe'])
-    if (restartZero) {
+    expect(await hasNonNullPermissions(db)).toBe(true)
+    if (resetZeroFull) {
+      await resetZeroFull()
+      await waitForZero(zeroPort, 90_000)
+    } else if (restartZero) {
       await restartZero()
       await waitForZero(zeroPort, 60_000)
     }
@@ -259,79 +281,54 @@ function connectAndSubscribe(
     const ts = Date.now()
     const clientGroupID = `restore-reset-cg-${ts}`
     const clientID = 'restore-reset-client'
-    const urlBase =
+    const initConnectionMessage: [string, Record<string, unknown>] = [
+      'initConnection',
+      {
+        desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
+        clientSchema: RESET_CLIENT_SCHEMA,
+      },
+    ]
+    const secProtocol = encodeSecProtocols(initConnectionMessage, undefined)
+    const ws = new WebSocket(
       `ws://127.0.0.1:${port}/sync/v${PROTOCOL_VERSION}/connect` +
-      `?clientGroupID=${clientGroupID}&clientID=${clientID}&schemaVersion=1&baseCookie=&ts=${ts}&lmid=0`
-
-    // bootstrap the client group first so the query connection is not "new group"
-    const bootstrapProtocol = encodeSecProtocols(
-      ['initConnection', { desiredQueriesPatch: [] }],
-      undefined
+        `?clientGroupID=${clientGroupID}&clientID=${clientID}&wsid=ws1&schemaVersion=1&baseCookie=&ts=${ts}&lmid=0`,
+      secProtocol
     )
-    const bootstrapWs = new WebSocket(`${urlBase}&wsid=bootstrap`, bootstrapProtocol)
-    const bootstrapTimer = setTimeout(() => {
-      fail(new Error('bootstrap websocket timeout'))
+
+    let settled = false
+    let sawMessage = false
+    const failTimer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      try {
+        ws.close()
+      } catch {}
+      reject(new Error('websocket connected but no downstream messages'))
     }, 7000)
 
-    const fail = (err: unknown) => {
-      clearTimeout(bootstrapTimer)
-      try {
-        bootstrapWs.close()
-      } catch {}
+    ws.on('message', (data) => {
+      const msg = JSON.parse(data.toString())
+      downstream.enqueue(msg)
+      if (!sawMessage && !settled) {
+        sawMessage = true
+        settled = true
+        clearTimeout(failTimer)
+        resolve(ws)
+      }
+    })
+
+    ws.once('error', (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(failTimer)
       reject(err)
-    }
+    })
 
-    bootstrapWs.once('error', fail)
-    bootstrapWs.once('message', () => {
-      clearTimeout(bootstrapTimer)
-      try {
-        bootstrapWs.close()
-      } catch {}
-
-      const initConnectionMessage: [string, Record<string, unknown>] = [
-        'initConnection',
-        {
-          desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
-        },
-      ]
-      const secProtocol = encodeSecProtocols(initConnectionMessage, undefined)
-      const ws = new WebSocket(`${urlBase}&wsid=ws1`, secProtocol)
-
-      let settled = false
-      let sawMessage = false
-      const failTimer = setTimeout(() => {
-        if (settled) return
-        settled = true
-        try {
-          ws.close()
-        } catch {}
-        reject(new Error('websocket connected but no downstream messages'))
-      }, 7000)
-
-      ws.on('message', (data) => {
-        const msg = JSON.parse(data.toString())
-        downstream.enqueue(msg)
-        if (!sawMessage && !settled) {
-          sawMessage = true
-          settled = true
-          clearTimeout(failTimer)
-          resolve(ws)
-        }
-      })
-
-      ws.once('error', (err) => {
-        if (settled) return
-        settled = true
-        clearTimeout(failTimer)
-        reject(err)
-      })
-
-      ws.once('close', () => {
-        if (settled) return
-        settled = true
-        clearTimeout(failTimer)
-        reject(new Error('websocket closed before initial downstream message'))
-      })
+    ws.once('close', () => {
+      if (settled) return
+      settled = true
+      clearTimeout(failTimer)
+      reject(new Error('websocket closed before initial downstream message'))
     })
   })
 }
