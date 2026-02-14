@@ -18,10 +18,22 @@ import WebSocket from 'ws'
 import { execDumpFile } from '../cli.js'
 import { startZeroLite } from '../index.js'
 import { installChangeTracking } from '../replication/change-tracker.js'
+import { installAllowAllPermissions } from './test-permissions.js'
 
 import type { PGlite } from '@electric-sql/pglite'
 
 const SYNC_PROTOCOL_VERSION = 45
+const RESTORE_LIVE_PROBE_CLIENT_SCHEMA = {
+  tables: {
+    restore_live_probe: {
+      columns: {
+        id: { type: 'string' },
+        value: { type: 'string' },
+      },
+      primaryKey: ['id'],
+    },
+  },
+}
 
 function encodeSecProtocols(
   initConnectionMessage: unknown,
@@ -123,23 +135,11 @@ function connectAndSubscribe(
   query: Record<string, unknown>
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const clientSchema = {
-      tables: {
-        restore_live_probe: {
-          columns: {
-            id: { type: 'string' },
-            value: { type: 'string' },
-          },
-          primaryKey: ['id'],
-        },
-      },
-    }
-
     const initConnectionMessage: [string, Record<string, unknown>] = [
       'initConnection',
       {
         desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
-        clientSchema,
+        clientSchema: RESTORE_LIVE_PROBE_CLIENT_SCHEMA,
       },
     ]
     const secProtocol = encodeSecProtocols(initConnectionMessage, undefined)
@@ -331,6 +331,7 @@ describe('live restore stress with connected frontend', { timeout: 360_000 }, ()
         value TEXT NOT NULL
       )
     `)
+    await installAllowAllPermissions(db, ['restore_live_probe'])
     const pubName = process.env.ZERO_APP_PUBLICATIONS?.trim()
     if (pubName) {
       const quotedPub = '"' + pubName.replace(/"/g, '""') + '"'
@@ -404,11 +405,8 @@ describe('live restore stress with connected frontend', { timeout: 360_000 }, ()
       throw new Error('post-reset write was not captured in _orez._zero_changes')
     }
 
-    // the test's primary goal is proving zero-cache survives reset and
-    // change tracking continues to work. full data flow to clients requires
-    // permissions setup which is a separate concern.
-    // if we got here: connection works, initial pokes received, and
-    // writes are captured in change tracking after reset.
+    await waitForPokeWithValue(downstreamAfterReset, marker, 30_000)
+
     ws.close()
   })
 })

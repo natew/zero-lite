@@ -11,10 +11,24 @@ import { describe, expect, test, beforeAll, afterAll, beforeEach } from 'vitest'
 import WebSocket from 'ws'
 
 import { startZeroLite } from '../index.js'
+import { installChangeTracking } from '../replication/change-tracker.js'
+import { installAllowAllPermissions } from './test-permissions.js'
 
 import type { PGlite } from '@electric-sql/pglite'
 
 const SYNC_PROTOCOL_VERSION = 45
+const FOO_CLIENT_SCHEMA = {
+  tables: {
+    foo: {
+      columns: {
+        id: { type: 'string' },
+        value: { type: 'string' },
+        num: { type: 'number' },
+      },
+      primaryKey: ['id'],
+    },
+  },
+}
 
 function encodeSecProtocols(
   initConnectionMessage: unknown,
@@ -103,6 +117,14 @@ describe('orez integration', { timeout: 120000 }, () => {
         foo_id TEXT
       );
     `)
+    const pubName = process.env.ZERO_APP_PUBLICATIONS?.trim()
+    if (pubName) {
+      const quotedPub = '"' + pubName.replace(/"/g, '""') + '"'
+      await db.exec(`ALTER PUBLICATION ${quotedPub} ADD TABLE "public"."foo"`).catch(() => {})
+      await db.exec(`ALTER PUBLICATION ${quotedPub} ADD TABLE "public"."bar"`).catch(() => {})
+      await installChangeTracking(db)
+    }
+    await installAllowAllPermissions(db, ['foo', 'bar'])
 
     console.log(`[test] tables created, waiting for zero-cache`)
     // wait for zero-cache to be ready
@@ -338,29 +360,12 @@ function connectAndSubscribe(
   downstream: Queue<unknown>,
   query: Record<string, unknown>
 ): WebSocket {
-  const table = String((query as { table?: unknown }).table ?? '')
-  const clientSchema =
-    table === 'foo'
-      ? {
-          tables: {
-            foo: {
-              columns: {
-                id: { type: 'string' },
-                value: { type: 'string' },
-                num: { type: 'number' },
-              },
-              primaryKey: ['id'],
-            },
-          },
-        }
-      : undefined
-
   const secProtocol = encodeSecProtocols(
     [
       'initConnection',
       {
         desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
-        ...(clientSchema ? { clientSchema } : {}),
+        clientSchema: FOO_CLIENT_SCHEMA,
       },
     ],
     undefined

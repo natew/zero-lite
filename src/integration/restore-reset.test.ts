@@ -18,9 +18,21 @@ import WebSocket from 'ws'
 
 import { execDumpFile } from '../cli.js'
 import { startZeroLite } from '../index.js'
+import { installAllowAllPermissions } from './test-permissions.js'
 
 // zero-cache protocol version (from @rocicorp/zero/out/zero-protocol/src/protocol-version.js)
 const PROTOCOL_VERSION = 45
+const RESET_PROBE_CLIENT_SCHEMA = {
+  tables: {
+    reset_probe: {
+      columns: {
+        id: { type: 'string' },
+        value: { type: 'string' },
+      },
+      primaryKey: ['id'],
+    },
+  },
+}
 
 // encode initConnection message for sec-websocket-protocol header
 // matches zero-protocol's encodeSecProtocols implementation
@@ -202,6 +214,14 @@ describe('restore/reset integration regression', { timeout: 150_000 }, () => {
         AFTER INSERT OR UPDATE OR DELETE ON public.reset_probe
         FOR EACH STATEMENT EXECUTE FUNCTION public._zero_notify_change();
     `)
+    const pubName = process.env.ZERO_APP_PUBLICATIONS?.trim()
+    if (pubName) {
+      const quotedPub = '"' + pubName.replace(/"/g, '""') + '"'
+      await db.exec(
+        `ALTER PUBLICATION ${quotedPub} ADD TABLE "public"."reset_probe"`
+      ).catch(() => {})
+    }
+    await installAllowAllPermissions(db, ['reset_probe'])
 
     const downstream = new Queue<unknown>()
     const ws = await connectAndSubscribeWithRetry(zeroPort, downstream, {
@@ -210,13 +230,25 @@ describe('restore/reset integration regression', { timeout: 150_000 }, () => {
     })
 
     try {
-      // verify we got initial pokes - this proves zero-cache is fully alive after reset
-      // drain returns after getting a pokeEnd, so zero-cache is responding
       await drainInitialPokes(downstream)
 
-      // the test's primary goal is proving zero-cache survives reset
-      // data flow verification requires permissions setup which is separate concern
-      // if we got here, zero-cache is alive and responding to queries after reset
+      await db.query(`INSERT INTO reset_probe (id, value) VALUES ($1, $2)`, [
+        `post-reset-${Date.now()}`,
+        'ok',
+      ])
+
+      const poke = await waitForPokePart(downstream, 30_000)
+      expect(poke.rowsPatch).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            op: 'put',
+            tableName: 'reset_probe',
+            value: expect.objectContaining({
+              value: 'ok',
+            }),
+          }),
+        ])
+      )
     } finally {
       ws.close()
     }
@@ -233,25 +265,12 @@ function connectAndSubscribe(
     const clientGroupID = `restore-reset-cg-${ts}`
     const clientID = 'restore-reset-client'
 
-    // client schema for new client group - describes tables we want to query
-    const clientSchema = {
-      tables: {
-        reset_probe: {
-          columns: {
-            id: { type: 'string' },
-            value: { type: 'string' },
-          },
-          primaryKey: ['id'],
-        },
-      },
-    }
-
     // encode initConnection message in sec-websocket-protocol header per zero protocol
     const initConnectionMessage: [string, Record<string, unknown>] = [
       'initConnection',
       {
         desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
-        clientSchema,
+        clientSchema: RESET_PROBE_CLIENT_SCHEMA,
       },
     ]
     const secProtocol = encodeSecProtocols(initConnectionMessage, undefined)
