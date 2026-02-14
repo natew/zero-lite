@@ -34,3 +34,25 @@ jobs:
 
       - name: test
         run: bun run test
+
+      - name: native sqlite guard
+        run: bun run test:native:guard
+
+  native-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: build
+        run: bun run build
+
+      - name: native integration
+        run: bun run test:integration:native
