@@ -22,17 +22,6 @@ import { installAllowAllPermissions } from './test-permissions.js'
 
 // zero-cache protocol version (from @rocicorp/zero/out/zero-protocol/src/protocol-version.js)
 const PROTOCOL_VERSION = 45
-const RESET_PROBE_CLIENT_SCHEMA = {
-  tables: {
-    reset_probe: {
-      columns: {
-        id: { type: 'string' },
-        value: { type: 'string' },
-      },
-      primaryKey: ['id'],
-    },
-  },
-}
 
 // encode initConnection message for sec-websocket-protocol header
 // matches zero-protocol's encodeSecProtocols implementation
@@ -270,57 +259,79 @@ function connectAndSubscribe(
     const ts = Date.now()
     const clientGroupID = `restore-reset-cg-${ts}`
     const clientID = 'restore-reset-client'
-
-    // encode initConnection message in sec-websocket-protocol header per zero protocol
-    const initConnectionMessage: [string, Record<string, unknown>] = [
-      'initConnection',
-      {
-        desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
-        clientSchema: RESET_PROBE_CLIENT_SCHEMA,
-      },
-    ]
-    const secProtocol = encodeSecProtocols(initConnectionMessage, undefined)
-
-    const url =
+    const urlBase =
       `ws://127.0.0.1:${port}/sync/v${PROTOCOL_VERSION}/connect` +
-      `?clientGroupID=${clientGroupID}&clientID=${clientID}&wsid=ws1&schemaVersion=1&baseCookie=&ts=${ts}&lmid=0`
+      `?clientGroupID=${clientGroupID}&clientID=${clientID}&schemaVersion=1&baseCookie=&ts=${ts}&lmid=0`
 
-    const ws = new WebSocket(url, secProtocol)
-
-    let settled = false
-    let sawMessage = false
-    const failTimer = setTimeout(() => {
-      if (settled) return
-      settled = true
-      try {
-        ws.close()
-      } catch {}
-      reject(new Error('websocket connected but no downstream messages'))
+    // bootstrap the client group first so the query connection is not "new group"
+    const bootstrapProtocol = encodeSecProtocols(
+      ['initConnection', { desiredQueriesPatch: [] }],
+      undefined
+    )
+    const bootstrapWs = new WebSocket(`${urlBase}&wsid=bootstrap`, bootstrapProtocol)
+    const bootstrapTimer = setTimeout(() => {
+      fail(new Error('bootstrap websocket timeout'))
     }, 7000)
 
-    ws.on('message', (data) => {
-      const msg = JSON.parse(data.toString())
-      downstream.enqueue(msg)
-      if (!sawMessage && !settled) {
-        sawMessage = true
+    const fail = (err: unknown) => {
+      clearTimeout(bootstrapTimer)
+      try {
+        bootstrapWs.close()
+      } catch {}
+      reject(err)
+    }
+
+    bootstrapWs.once('error', fail)
+    bootstrapWs.once('message', () => {
+      clearTimeout(bootstrapTimer)
+      try {
+        bootstrapWs.close()
+      } catch {}
+
+      const initConnectionMessage: [string, Record<string, unknown>] = [
+        'initConnection',
+        {
+          desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
+        },
+      ]
+      const secProtocol = encodeSecProtocols(initConnectionMessage, undefined)
+      const ws = new WebSocket(`${urlBase}&wsid=ws1`, secProtocol)
+
+      let settled = false
+      let sawMessage = false
+      const failTimer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        try {
+          ws.close()
+        } catch {}
+        reject(new Error('websocket connected but no downstream messages'))
+      }, 7000)
+
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString())
+        downstream.enqueue(msg)
+        if (!sawMessage && !settled) {
+          sawMessage = true
+          settled = true
+          clearTimeout(failTimer)
+          resolve(ws)
+        }
+      })
+
+      ws.once('error', (err) => {
+        if (settled) return
         settled = true
         clearTimeout(failTimer)
-        resolve(ws)
-      }
-    })
+        reject(err)
+      })
 
-    ws.once('error', (err) => {
-      if (settled) return
-      settled = true
-      clearTimeout(failTimer)
-      reject(err)
-    })
-
-    ws.once('close', () => {
-      if (settled) return
-      settled = true
-      clearTimeout(failTimer)
-      reject(new Error('websocket closed before initial downstream message'))
+      ws.once('close', () => {
+        if (settled) return
+        settled = true
+        clearTimeout(failTimer)
+        reject(new Error('websocket closed before initial downstream message'))
+      })
     })
   })
 }

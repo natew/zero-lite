@@ -23,17 +23,6 @@ import { installAllowAllPermissions } from './test-permissions.js'
 import type { PGlite } from '@electric-sql/pglite'
 
 const SYNC_PROTOCOL_VERSION = 45
-const RESTORE_LIVE_PROBE_CLIENT_SCHEMA = {
-  tables: {
-    restore_live_probe: {
-      columns: {
-        id: { type: 'string' },
-        value: { type: 'string' },
-      },
-      primaryKey: ['id'],
-    },
-  },
-}
 
 function encodeSecProtocols(
   initConnectionMessage: unknown,
@@ -139,52 +128,78 @@ function connectAndSubscribe(
   query: Record<string, unknown>
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const initConnectionMessage: [string, Record<string, unknown>] = [
-      'initConnection',
-      {
-        desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
-        clientSchema: RESTORE_LIVE_PROBE_CLIENT_SCHEMA,
-      },
-    ]
-    const secProtocol = encodeSecProtocols(initConnectionMessage, undefined)
-    const ws = new WebSocket(
+    const ts = Date.now()
+    const clientGroupID = `restore-live-cg-${ts}`
+    const urlBase =
       `ws://127.0.0.1:${port}/sync/v${SYNC_PROTOCOL_VERSION}/connect` +
-        `?clientGroupID=restore-live-cg-${Date.now()}` +
-        `&clientID=restore-live-client` +
-        `&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
-      secProtocol
+      `?clientGroupID=${clientGroupID}` +
+      `&clientID=restore-live-client` +
+      `&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`
+
+    const bootstrapProtocol = encodeSecProtocols(
+      ['initConnection', { desiredQueriesPatch: [] }],
+      undefined
     )
+    const bootstrapWs = new WebSocket(`${urlBase}&wsid=bootstrap`, bootstrapProtocol)
 
-    let settled = false
-    const failTimer = setTimeout(() => {
-      if (settled) return
-      settled = true
+    const fail = (err: unknown) => {
+      clearTimeout(bootstrapTimer)
       try {
-        ws.close()
+        bootstrapWs.close()
       } catch {}
-      reject(new Error('websocket connected but no downstream messages'))
-    }, 7000)
+      reject(err)
+    }
 
-    ws.on('message', (data) => {
-      const msg = JSON.parse(data.toString())
-      downstream.enqueue(msg)
-      if (!settled) {
+    const bootstrapTimer = setTimeout(() => {
+      fail(new Error('bootstrap websocket timeout'))
+    }, 7000)
+    bootstrapWs.once('error', fail)
+    bootstrapWs.once('message', () => {
+      clearTimeout(bootstrapTimer)
+      try {
+        bootstrapWs.close()
+      } catch {}
+
+      const initConnectionMessage: [string, Record<string, unknown>] = [
+        'initConnection',
+        {
+          desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
+        },
+      ]
+      const secProtocol = encodeSecProtocols(initConnectionMessage, undefined)
+      const ws = new WebSocket(`${urlBase}&wsid=ws1`, secProtocol)
+
+      let settled = false
+      const failTimer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        try {
+          ws.close()
+        } catch {}
+        reject(new Error('websocket connected but no downstream messages'))
+      }, 7000)
+
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString())
+        downstream.enqueue(msg)
+        if (!settled) {
+          settled = true
+          clearTimeout(failTimer)
+          resolve(ws)
+        }
+      })
+      ws.once('error', (err) => {
+        if (settled) return
         settled = true
         clearTimeout(failTimer)
-        resolve(ws)
-      }
-    })
-    ws.once('error', (err) => {
-      if (settled) return
-      settled = true
-      clearTimeout(failTimer)
-      reject(err)
-    })
-    ws.once('close', () => {
-      if (settled) return
-      settled = true
-      clearTimeout(failTimer)
-      reject(new Error('websocket closed before initial downstream message'))
+        reject(err)
+      })
+      ws.once('close', () => {
+        if (settled) return
+        settled = true
+        clearTimeout(failTimer)
+        reject(new Error('websocket closed before initial downstream message'))
+      })
     })
   })
 }

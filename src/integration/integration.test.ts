@@ -17,18 +17,6 @@ import { installAllowAllPermissions } from './test-permissions.js'
 import type { PGlite } from '@electric-sql/pglite'
 
 const SYNC_PROTOCOL_VERSION = 45
-const FOO_CLIENT_SCHEMA = {
-  tables: {
-    foo: {
-      columns: {
-        id: { type: 'string' },
-        value: { type: 'string' },
-        num: { type: 'number' },
-      },
-      primaryKey: ['id'],
-    },
-  },
-}
 
 function encodeSecProtocols(
   initConnectionMessage: unknown,
@@ -134,6 +122,7 @@ describe('orez integration', { timeout: 120000 }, () => {
     if (restartZero) {
       await restartZero()
     }
+    await ensureClientGroup(zeroPort, 'test-cg')
 
     console.log(`[test] tables created, waiting for zero-cache`)
     // wait for zero-cache to be ready
@@ -374,14 +363,13 @@ describe('orez integration', { timeout: 120000 }, () => {
         'initConnection',
         {
           desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
-          clientSchema: FOO_CLIENT_SCHEMA,
         },
       ],
       undefined
     )
     const ws = new WebSocket(
       `ws://localhost:${port}/sync/v${SYNC_PROTOCOL_VERSION}/connect` +
-        `?clientGroupID=test-cg-${Date.now()}&clientID=test-client&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
+        `?clientGroupID=test-cg&clientID=test-client&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
       secProtocol
     )
 
@@ -468,4 +456,35 @@ async function waitForZero(port: number, timeoutMs = 30000) {
     await new Promise((r) => setTimeout(r, 500))
   }
   throw new Error(`zero-cache not ready on port ${port} after ${timeoutMs}ms`)
+}
+
+async function ensureClientGroup(port: number, clientGroupID: string): Promise<void> {
+  const secProtocol = encodeSecProtocols(
+    ['initConnection', { desiredQueriesPatch: [] }],
+    undefined
+  )
+  await new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(
+      `ws://localhost:${port}/sync/v${SYNC_PROTOCOL_VERSION}/connect` +
+        `?clientGroupID=${clientGroupID}&clientID=test-client&wsid=ws-bootstrap&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
+      secProtocol
+    )
+
+    const timer = setTimeout(() => {
+      try {
+        ws.close()
+      } catch {}
+      reject(new Error('client-group bootstrap timeout'))
+    }, 7000)
+
+    ws.once('message', () => {
+      clearTimeout(timer)
+      ws.close()
+      resolve()
+    })
+    ws.once('error', (err) => {
+      clearTimeout(timer)
+      reject(err)
+    })
+  })
 }

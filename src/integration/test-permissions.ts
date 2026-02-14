@@ -10,7 +10,7 @@ export async function installAllowAllPermissions(
   db: DbLike,
   tables: string[]
 ): Promise<void> {
-  const schema = DEFAULT_APP_ID
+  const schema = (await findPermissionsSchema(db)) || DEFAULT_APP_ID
   const quotedSchema = '"' + schema.replace(/"/g, '""') + '"'
 
   // Bootstrap the same global permissions table shape zero-cache expects.
@@ -89,4 +89,18 @@ function parsePermissions(value: unknown): { tables?: Record<string, unknown> } 
   }
   if (typeof value === 'object') return value as { tables?: Record<string, unknown> }
   return {}
+}
+
+async function findPermissionsSchema(db: DbLike): Promise<string | null> {
+  const result = await db.query<{ schemaname: string }>(
+    `SELECT schemaname
+     FROM pg_tables
+     WHERE tablename = 'permissions'
+       AND schemaname NOT IN ('pg_catalog', 'information_schema')
+       AND schemaname NOT LIKE 'pg_%'
+     ORDER BY CASE WHEN schemaname = $1 THEN 0 ELSE 1 END, schemaname
+     LIMIT 1`,
+    [DEFAULT_APP_ID]
+  )
+  return result.rows[0]?.schemaname ?? null
 }
