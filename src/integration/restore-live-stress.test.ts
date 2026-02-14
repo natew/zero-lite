@@ -110,8 +110,12 @@ function generateStressDump(opts: {
   for (let t = 0; t < opts.tables; t++) {
     const table = `stress_restore_${t}`
     const cols = Array.from({ length: opts.columnsPerTable }, (_, i) => `c_${i} TEXT`)
-    lines.push(`CREATE TABLE IF NOT EXISTS ${table} (id BIGINT PRIMARY KEY, ${cols.join(', ')});`)
-    lines.push(`COPY ${table} (id, ${Array.from({ length: opts.columnsPerTable }, (_, i) => `c_${i}`).join(', ')}) FROM stdin;`)
+    lines.push(
+      `CREATE TABLE IF NOT EXISTS ${table} (id BIGINT PRIMARY KEY, ${cols.join(', ')});`
+    )
+    lines.push(
+      `COPY ${table} (id, ${Array.from({ length: opts.columnsPerTable }, (_, i) => `c_${i}`).join(', ')}) FROM stdin;`
+    )
 
     for (let r = 0; r < opts.rowsPerTable; r++) {
       const id = t * 1_000_000 + r + 1
@@ -335,9 +339,9 @@ describe('live restore stress with connected frontend', { timeout: 360_000 }, ()
     const pubName = process.env.ZERO_APP_PUBLICATIONS?.trim()
     if (pubName) {
       const quotedPub = '"' + pubName.replace(/"/g, '""') + '"'
-      await db.exec(
-        `ALTER PUBLICATION ${quotedPub} ADD TABLE "public"."restore_live_probe"`
-      ).catch(() => {})
+      await db
+        .exec(`ALTER PUBLICATION ${quotedPub} ADD TABLE "public"."restore_live_probe"`)
+        .catch(() => {})
       await installChangeTracking(db)
     }
     await db.query(`INSERT INTO restore_live_probe (id, value) VALUES ($1, $2)`, [
@@ -375,9 +379,9 @@ describe('live restore stress with connected frontend', { timeout: 360_000 }, ()
     await waitForZero(zeroPort, 90_000)
     if (pubName) {
       const quotedPub = '"' + pubName.replace(/"/g, '""') + '"'
-      await db.exec(
-        `ALTER PUBLICATION ${quotedPub} ADD TABLE "public"."restore_live_probe"`
-      ).catch(() => {})
+      await db
+        .exec(`ALTER PUBLICATION ${quotedPub} ADD TABLE "public"."restore_live_probe"`)
+        .catch(() => {})
     }
 
     try {

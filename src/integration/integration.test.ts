@@ -81,6 +81,7 @@ describe('orez integration', { timeout: 120000 }, () => {
   let zeroPort: number
   let pgPort: number
   let shutdown: () => Promise<void>
+  let restartZero: (() => Promise<void>) | undefined
   let dataDir: string
 
   beforeAll(async () => {
@@ -101,6 +102,7 @@ describe('orez integration', { timeout: 120000 }, () => {
     zeroPort = result.zeroPort
     pgPort = result.pgPort
     shutdown = result.stop
+    restartZero = result.restartZero
 
     console.log(`[test] orez started, creating tables`)
 
@@ -120,11 +122,18 @@ describe('orez integration', { timeout: 120000 }, () => {
     const pubName = process.env.ZERO_APP_PUBLICATIONS?.trim()
     if (pubName) {
       const quotedPub = '"' + pubName.replace(/"/g, '""') + '"'
-      await db.exec(`ALTER PUBLICATION ${quotedPub} ADD TABLE "public"."foo"`).catch(() => {})
-      await db.exec(`ALTER PUBLICATION ${quotedPub} ADD TABLE "public"."bar"`).catch(() => {})
+      await db
+        .exec(`ALTER PUBLICATION ${quotedPub} ADD TABLE "public"."foo"`)
+        .catch(() => {})
+      await db
+        .exec(`ALTER PUBLICATION ${quotedPub} ADD TABLE "public"."bar"`)
+        .catch(() => {})
       await installChangeTracking(db)
     }
     await installAllowAllPermissions(db, ['foo', 'bar'])
+    if (restartZero) {
+      await restartZero()
+    }
 
     console.log(`[test] tables created, waiting for zero-cache`)
     // wait for zero-cache to be ready
@@ -355,33 +364,33 @@ describe('orez integration', { timeout: 120000 }, () => {
 
   // --- helpers ---
 
-function connectAndSubscribe(
-  port: number,
-  downstream: Queue<unknown>,
-  query: Record<string, unknown>
-): WebSocket {
-  const secProtocol = encodeSecProtocols(
-    [
-      'initConnection',
-      {
-        desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
-        clientSchema: FOO_CLIENT_SCHEMA,
-      },
-    ],
-    undefined
-  )
-  const ws = new WebSocket(
-    `ws://localhost:${port}/sync/v${SYNC_PROTOCOL_VERSION}/connect` +
-      `?clientGroupID=test-cg-${Date.now()}&clientID=test-client&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
-    secProtocol
-  )
+  function connectAndSubscribe(
+    port: number,
+    downstream: Queue<unknown>,
+    query: Record<string, unknown>
+  ): WebSocket {
+    const secProtocol = encodeSecProtocols(
+      [
+        'initConnection',
+        {
+          desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
+          clientSchema: FOO_CLIENT_SCHEMA,
+        },
+      ],
+      undefined
+    )
+    const ws = new WebSocket(
+      `ws://localhost:${port}/sync/v${SYNC_PROTOCOL_VERSION}/connect` +
+        `?clientGroupID=test-cg-${Date.now()}&clientID=test-client&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
+      secProtocol
+    )
 
     ws.on('message', (data) => {
       downstream.enqueue(JSON.parse(data.toString()))
     })
 
-  return ws
-}
+    return ws
+  }
 
   async function drainInitialPokes(downstream: Queue<unknown>) {
     // drain messages until we've seen the initial data sync complete

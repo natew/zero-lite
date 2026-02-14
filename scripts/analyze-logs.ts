@@ -63,7 +63,9 @@ function readLogs(): LogLine[] {
   const lines: LogLine[] = []
 
   try {
-    const files = readdirSync(logDir).filter((f) => f.endsWith('.log') && !f.endsWith('.log.1'))
+    const files = readdirSync(logDir).filter(
+      (f) => f.endsWith('.log') && !f.endsWith('.log.1')
+    )
 
     for (const file of files) {
       const source = basename(file, '.log')
@@ -104,11 +106,15 @@ function showLogs() {
   const toShow = lines.slice(-lastN)
 
   if (toShow.length === 0) {
-    console.log(`no logs found in ${logDir} (level: ${levelFilter}, source: ${sourceFilter || 'all'})`)
+    console.log(
+      `no logs found in ${logDir} (level: ${levelFilter}, source: ${sourceFilter || 'all'})`
+    )
     return
   }
 
-  console.log(`\x1b[1m--- last ${toShow.length} logs (level: ${levelFilter}, source: ${sourceFilter || 'all'}) ---\x1b[0m\n`)
+  console.log(
+    `\x1b[1m--- last ${toShow.length} logs (level: ${levelFilter}, source: ${sourceFilter || 'all'}) ---\x1b[0m\n`
+  )
 
   for (const line of toShow) {
     console.log(formatLine(line))
@@ -154,7 +160,9 @@ if (follow) {
 
   setInterval(() => {
     try {
-      const files = readdirSync(logDir).filter((f) => f.endsWith('.log') && !f.endsWith('.log.1'))
+      const files = readdirSync(logDir).filter(
+        (f) => f.endsWith('.log') && !f.endsWith('.log.1')
+      )
       for (const file of files) {
         const source = basename(file, '.log')
         if (sourceFilter && source !== sourceFilter) continue

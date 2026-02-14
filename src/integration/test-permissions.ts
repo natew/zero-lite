@@ -6,7 +6,10 @@ const ALLOW_ALL_CONDITION = { type: 'and', conditions: [] as unknown[] }
 const ALLOW_ALL_POLICY = [['allow', ALLOW_ALL_CONDITION]]
 const DEFAULT_APP_ID = process.env.ZERO_APP_ID?.trim() || 'zero'
 
-export async function installAllowAllPermissions(db: DbLike, tables: string[]): Promise<void> {
+export async function installAllowAllPermissions(
+  db: DbLike,
+  tables: string[]
+): Promise<void> {
   const schema = DEFAULT_APP_ID
   const quotedSchema = '"' + schema.replace(/"/g, '""') + '"'
 
@@ -44,34 +47,35 @@ export async function installAllowAllPermissions(db: DbLike, tables: string[]): 
   )
   const existingPermissions = parsePermissions(existing.rows[0]?.permissions)
 
+  const tablesToAdd = Object.fromEntries(
+    tables.map((table) => [
+      table,
+      {
+        row: {
+          select: ALLOW_ALL_POLICY,
+          insert: ALLOW_ALL_POLICY,
+          update: {
+            preMutation: ALLOW_ALL_POLICY,
+            postMutation: ALLOW_ALL_POLICY,
+          },
+          delete: ALLOW_ALL_POLICY,
+        },
+      },
+    ])
+  )
+
   const permissions = {
     ...existingPermissions,
-    tables: Object.fromEntries(
-      tables.map((table) => [
-        table,
-        {
-          row: {
-            select: ALLOW_ALL_POLICY,
-            insert: ALLOW_ALL_POLICY,
-            update: {
-              preMutation: ALLOW_ALL_POLICY,
-              postMutation: ALLOW_ALL_POLICY,
-            },
-            delete: ALLOW_ALL_POLICY,
-          },
-        },
-      ])
-    ),
+    tables: {
+      ...(existingPermissions.tables || {}),
+      ...tablesToAdd,
+    },
   }
 
-  permissions.tables = {
-    ...(existingPermissions.tables || {}),
-    ...permissions.tables,
-  }
-
-  await db.query(`UPDATE ${quotedSchema}.permissions SET permissions = $1 WHERE lock = true`, [
-    JSON.stringify(permissions),
-  ])
+  await db.query(
+    `UPDATE ${quotedSchema}.permissions SET permissions = $1 WHERE lock = true`,
+    [JSON.stringify(permissions)]
+  )
 }
 
 function parsePermissions(value: unknown): { tables?: Record<string, unknown> } {

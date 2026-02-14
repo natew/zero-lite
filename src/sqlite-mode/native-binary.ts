@@ -68,7 +68,9 @@ export function hasMissingNativeBinarySignature(message: string): boolean {
   )
 }
 
-export function formatNativeBootstrapInstructions(result: NativeBinaryCheckResult): string {
+export function formatNativeBootstrapInstructions(
+  result: NativeBinaryCheckResult
+): string {
   const expectedList =
     result.expectedPaths.length > 0
       ? result.expectedPaths.map((filePath) => `  - ${filePath}`).join('\n')

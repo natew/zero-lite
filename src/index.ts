@@ -374,7 +374,6 @@ export async function startZeroLite(overrides: Partial<ZeroLiteConfig> = {}) {
           DATABASE_URL: upstreamUrl,
           OREZ_PG_PORT: String(config.pgPort),
         })
-
       }
 
       // always re-install change tracking after a full reset so public table

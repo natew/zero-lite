@@ -28,7 +28,9 @@ function verifyOrThrow(context: string): void {
     return
   }
 
-  throw new Error(`[native:bootstrap] ${context}\n${formatNativeBootstrapInstructions(check)}`)
+  throw new Error(
+    `[native:bootstrap] ${context}\n${formatNativeBootstrapInstructions(check)}`
+  )
 }
 
 function main(): void {
@@ -38,7 +40,9 @@ function main(): void {
     return
   }
 
-  console.warn('[native:bootstrap] native binary missing, reinstalling @rocicorp/zero-sqlite3')
+  console.warn(
+    '[native:bootstrap] native binary missing, reinstalling @rocicorp/zero-sqlite3'
+  )
   runReinstall()
   verifyOrThrow('post-reinstall check')
 }

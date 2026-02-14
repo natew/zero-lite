@@ -127,6 +127,7 @@ describe('restore/reset integration regression', { timeout: 150_000 }, () => {
   let pgPort: number
   let zeroPort: number
   let shutdown: () => Promise<void>
+  let restartZero: (() => Promise<void>) | undefined
   let dataDir: string
   let dumpFile: string
   let dumpFileIsTemp = false
@@ -152,6 +153,7 @@ describe('restore/reset integration regression', { timeout: 150_000 }, () => {
     pgPort = started.pgPort
     zeroPort = started.zeroPort
     shutdown = started.stop
+    restartZero = started.restartZero
 
     await waitForZero(zeroPort, 90_000)
   }, 120_000)
@@ -217,11 +219,15 @@ describe('restore/reset integration regression', { timeout: 150_000 }, () => {
     const pubName = process.env.ZERO_APP_PUBLICATIONS?.trim()
     if (pubName) {
       const quotedPub = '"' + pubName.replace(/"/g, '""') + '"'
-      await db.exec(
-        `ALTER PUBLICATION ${quotedPub} ADD TABLE "public"."reset_probe"`
-      ).catch(() => {})
+      await db
+        .exec(`ALTER PUBLICATION ${quotedPub} ADD TABLE "public"."reset_probe"`)
+        .catch(() => {})
     }
     await installAllowAllPermissions(db, ['reset_probe'])
+    if (restartZero) {
+      await restartZero()
+      await waitForZero(zeroPort, 60_000)
+    }
 
     const downstream = new Queue<unknown>()
     const ws = await connectAndSubscribeWithRetry(zeroPort, downstream, {

@@ -27,7 +27,9 @@ async function detectAdminPort(dataDir: string): Promise<number | null> {
   // fallback: try common admin ports
   for (const port of [6477, 6478, 6479]) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(500) })
+      const res = await fetch(`http://127.0.0.1:${port}/health`, {
+        signal: AbortSignal.timeout(500),
+      })
       if (res.ok) return port
     } catch {}
   }
