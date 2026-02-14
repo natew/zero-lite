@@ -460,7 +460,7 @@ async function waitForZero(port: number, timeoutMs = 30000) {
 
 async function ensureClientGroup(port: number, clientGroupID: string): Promise<void> {
   const secProtocol = encodeSecProtocols(
-    ['initConnection', { desiredQueriesPatch: [] }],
+    ['initConnection', { desiredQueriesPatch: [], clientSchema: { tables: {} } }],
     undefined
   )
   await new Promise<void>((resolve, reject) => {
@@ -477,10 +477,16 @@ async function ensureClientGroup(port: number, clientGroupID: string): Promise<v
       reject(new Error('client-group bootstrap timeout'))
     }, 7000)
 
-    ws.once('message', () => {
+    ws.once('message', (data) => {
       clearTimeout(timer)
+      const msg = JSON.parse(data.toString())
+      const isError = Array.isArray(msg) && msg[0] === 'error'
       ws.close()
-      resolve()
+      if (isError) {
+        reject(new Error(`client-group bootstrap failed: ${JSON.stringify(msg)}`))
+      } else {
+        resolve()
+      }
     })
     ws.once('error', (err) => {
       clearTimeout(timer)

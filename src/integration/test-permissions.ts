@@ -10,11 +10,16 @@ export async function installAllowAllPermissions(
   db: DbLike,
   tables: string[]
 ): Promise<void> {
-  const schema = (await findPermissionsSchema(db)) || DEFAULT_APP_ID
-  const quotedSchema = '"' + schema.replace(/"/g, '""') + '"'
+  const schemas = await findPermissionsSchemas(db)
+  if (schemas.length === 0) {
+    schemas.push(DEFAULT_APP_ID)
+  }
 
-  // Bootstrap the same global permissions table shape zero-cache expects.
-  await db.exec(`
+  for (const schema of schemas) {
+    const quotedSchema = '"' + schema.replace(/"/g, '""') + '"'
+
+    // Bootstrap the same global permissions table shape zero-cache expects.
+    await db.exec(`
     CREATE SCHEMA IF NOT EXISTS ${quotedSchema};
 
     CREATE TABLE IF NOT EXISTS ${quotedSchema}.permissions (
@@ -42,40 +47,41 @@ export async function installAllowAllPermissions(
       ON CONFLICT DO NOTHING;
   `)
 
-  const existing = await db.query<{ permissions: unknown }>(
-    `SELECT permissions FROM ${quotedSchema}.permissions WHERE lock = true LIMIT 1`
-  )
-  const existingPermissions = parsePermissions(existing.rows[0]?.permissions)
+    const existing = await db.query<{ permissions: unknown }>(
+      `SELECT permissions FROM ${quotedSchema}.permissions WHERE lock = true LIMIT 1`
+    )
+    const existingPermissions = parsePermissions(existing.rows[0]?.permissions)
 
-  const tablesToAdd = Object.fromEntries(
-    tables.map((table) => [
-      table,
-      {
-        row: {
-          select: ALLOW_ALL_POLICY,
-          insert: ALLOW_ALL_POLICY,
-          update: {
-            preMutation: ALLOW_ALL_POLICY,
-            postMutation: ALLOW_ALL_POLICY,
+    const tablesToAdd = Object.fromEntries(
+      tables.map((table) => [
+        table,
+        {
+          row: {
+            select: ALLOW_ALL_POLICY,
+            insert: ALLOW_ALL_POLICY,
+            update: {
+              preMutation: ALLOW_ALL_POLICY,
+              postMutation: ALLOW_ALL_POLICY,
+            },
+            delete: ALLOW_ALL_POLICY,
           },
-          delete: ALLOW_ALL_POLICY,
         },
+      ])
+    )
+
+    const permissions = {
+      ...existingPermissions,
+      tables: {
+        ...(existingPermissions.tables || {}),
+        ...tablesToAdd,
       },
-    ])
-  )
+    }
 
-  const permissions = {
-    ...existingPermissions,
-    tables: {
-      ...(existingPermissions.tables || {}),
-      ...tablesToAdd,
-    },
+    await db.query(
+      `UPDATE ${quotedSchema}.permissions SET permissions = $1 WHERE lock = true`,
+      [JSON.stringify(permissions)]
+    )
   }
-
-  await db.query(
-    `UPDATE ${quotedSchema}.permissions SET permissions = $1 WHERE lock = true`,
-    [JSON.stringify(permissions)]
-  )
 }
 
 function parsePermissions(value: unknown): { tables?: Record<string, unknown> } {
@@ -91,16 +97,15 @@ function parsePermissions(value: unknown): { tables?: Record<string, unknown> } 
   return {}
 }
 
-async function findPermissionsSchema(db: DbLike): Promise<string | null> {
+async function findPermissionsSchemas(db: DbLike): Promise<string[]> {
   const result = await db.query<{ schemaname: string }>(
     `SELECT schemaname
      FROM pg_tables
      WHERE tablename = 'permissions'
        AND schemaname NOT IN ('pg_catalog', 'information_schema')
        AND schemaname NOT LIKE 'pg_%'
-     ORDER BY CASE WHEN schemaname = $1 THEN 0 ELSE 1 END, schemaname
-     LIMIT 1`,
+     ORDER BY CASE WHEN schemaname = $1 THEN 0 ELSE 1 END, schemaname`,
     [DEFAULT_APP_ID]
   )
-  return result.rows[0]?.schemaname ?? null
+  return result.rows.map((r) => r.schemaname)
 }
