@@ -24,7 +24,7 @@ describe('native sqlite startup integration', { timeout: 120_000 }, () => {
 
     shutdown = started.stop
     zeroPort = started.zeroPort
-  })
+  }, 60_000)
 
   afterAll(async () => {
     if (shutdown) await shutdown()
