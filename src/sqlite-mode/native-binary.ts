@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 
-import { resolvePackage } from './resolve-mode.js'
+import { resolvePackage } from './package-resolve.js'
 
 const NATIVE_BINARY_RELATIVE_PATHS = ['build/Release/better_sqlite3.node']
 

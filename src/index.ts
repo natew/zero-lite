@@ -123,9 +123,7 @@ async function syncManagedPublications(
     const inPubSet = new Set(inPub.rows.map((r) => r.tablename))
     const toAdd = publicTables.filter((t) => !inPubSet.has(t))
     if (toAdd.length === 0) continue
-    const tableList = toAdd
-      .map((t) => `"public"."${t.replace(/"/g, '""')}"`)
-      .join(', ')
+    const tableList = toAdd.map((t) => `"public"."${t.replace(/"/g, '""')}"`).join(', ')
     await db.exec(`ALTER PUBLICATION ${quotedPub} ADD TABLE ${tableList}`)
     log.debug.orez(`added ${toAdd.length} table(s) to publication "${pub}"`)
   }

@@ -185,13 +185,15 @@ describe('orez integration', { timeout: 120000 }, () => {
   })
 
   test('zero-cache starts and accepts websocket connections', async () => {
+    const cg = `test-cg-${Date.now()}`
+    const cid = `test-client-${Date.now()}`
     const secProtocol = encodeSecProtocols(
       ['initConnection', { desiredQueriesPatch: [] }],
       undefined
     )
     const ws = new WebSocket(
       `ws://localhost:${zeroPort}/sync/v${SYNC_PROTOCOL_VERSION}/connect` +
-        `?clientGroupID=test-cg&clientID=test-client&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
+        `?clientGroupID=${cg}&clientID=${cid}&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
       secProtocol
     )
 
@@ -397,19 +399,21 @@ describe('orez integration', { timeout: 120000 }, () => {
     downstream: Queue<unknown>,
     query: Record<string, unknown>
   ): WebSocket {
+    const cg = `test-cg-${Date.now()}`
+    const cid = `test-client-${Date.now()}`
     const secProtocol = encodeSecProtocols(
       [
-      'initConnection',
-      {
-        desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
-        clientSchema: CLIENT_SCHEMA,
-      },
-    ],
-    undefined
-  )
+        'initConnection',
+        {
+          desiredQueriesPatch: [{ op: 'put', hash: 'q1', ast: query }],
+          clientSchema: CLIENT_SCHEMA,
+        },
+      ],
+      undefined
+    )
     const ws = new WebSocket(
       `ws://localhost:${port}/sync/v${SYNC_PROTOCOL_VERSION}/connect` +
-        `?clientGroupID=test-cg&clientID=test-client&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
+        `?clientGroupID=${cg}&clientID=${cid}&wsid=ws1&schemaVersion=1&baseCookie=&ts=${Date.now()}&lmid=0`,
       secProtocol
     )
 
