@@ -74,7 +74,7 @@ describe('handleReplicationQuery', () => {
     expect(parsed!.values[3]).toBe('pgoutput')
 
     const slots = await db.query<{ slot_name: string }>(
-      `SELECT slot_name FROM public._zero_replication_slots WHERE slot_name = 'test_slot'`
+      `SELECT slot_name FROM _orez._zero_replication_slots WHERE slot_name = 'test_slot'`
     )
     expect(slots.rows).toHaveLength(1)
   })
@@ -87,7 +87,7 @@ describe('handleReplicationQuery', () => {
     await handleReplicationQuery('DROP_REPLICATION_SLOT "drop_me"', db)
 
     const slots = await db.query<{ count: string }>(
-      `SELECT count(*) as count FROM public._zero_replication_slots WHERE slot_name = 'drop_me'`
+      `SELECT count(*) as count FROM _orez._zero_replication_slots WHERE slot_name = 'drop_me'`
     )
     expect(Number(slots.rows[0].count)).toBe(0)
   })
