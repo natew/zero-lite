@@ -786,7 +786,7 @@ export function createOrezDataWorker<
     // the marker has been read, and the run itself is shared with any feed
     // that asked at the same time.
     protected override async admitApplicationSql(): Promise<void> {
-      if (this.orezApplicationSchemaReady()) return
+      if (this.orezApplicationSchemaReady() || this.orezRestoreInProgress()) return
       await this.orezRunApplicationSchema(schemaVersion, this.orezInstance)
     }
 

@@ -1,10 +1,10 @@
 diff --git a/packages/orez-lite/src/cf-do/lite-data-worker.ts b/packages/orez-lite/src/cf-do/lite-data-worker.ts
 --- a/packages/orez-lite/src/cf-do/lite-data-worker.ts
 +++ b/packages/orez-lite/src/cf-do/lite-data-worker.ts
-@@ -970,15 +970,8 @@ export function createOrezDataWorker<
-         markerTable: backupMarkerTable,
-         files: options.backup.bucket,
-         query: queryNamespace,
+@@ -1030,15 +1030,8 @@ export function createOrezDataWorker<
+           env.ZERO_SQL_DO.get(
+             env.ZERO_SQL_DO.idFromName(canonical(namespace))
+           ).backupSnapshotDrop(id),
 -        readSession: (env, namespace, work, readOptions) =>
 -          createApplicationSqlClient(env.ZERO_SQL_DO, canonical(namespace), {
 -            priority: readOptions.priority,

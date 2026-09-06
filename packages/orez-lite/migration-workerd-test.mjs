@@ -284,7 +284,9 @@ try {
   })
   // raw application sql on a namespace nobody migrated converges the schema
   // before the statement runs, so the tables it asks for already exist
-  const firstTouch = await fetch(`${base}/first-touch/proj-untouched-${crypto.randomUUID()}`)
+  const firstTouch = await fetch(
+    `${base}/first-touch/proj-untouched-${crypto.randomUUID()}`
+  )
   assert.equal(firstTouch.status, 200, await firstTouch.clone().text())
   assert.deepEqual(await firstTouch.json(), [{ name: 'alpha' }, { name: 'beta' }])
   const proofResponse = await fetch(
