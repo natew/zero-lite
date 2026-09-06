@@ -188,8 +188,9 @@ fn a_group_that_stops_pulling_is_collected_and_one_that_keeps_pulling_is_not() {
     );
     assert_eq!(host.count("_zsync_row_refs", "g-leaves"), 0);
     assert_eq!(host.count("_zsync_query_state", "g-leaves"), 0);
-    assert_eq!(host.count("_zsync_queries", "g-leaves"), 0);
     assert_eq!(host.count("_zsync_client_group_seen", "g-leaves"), 0);
+    // the definitions stay: they are what a returning pull recomputes from.
+    assert!(host.count("_zsync_queries", "g-leaves") > 0);
 
     // lastMutationID outlives the cache: it is mutation dedup, not membership.
     assert_eq!(
@@ -283,5 +284,85 @@ fn a_collected_group_that_comes_back_resyncs_from_scratch() {
         host.count("_zsync_client_group_seen", "g-returns"),
         1,
         "and is tracked again from here"
+    );
+}
+
+/// Two groups that both keep pulling must both survive, whichever of them
+/// raises the floor. The seen watermark refreshes lazily (once per retention
+/// window), so a group that pulled a moment ago can still carry a watermark a
+/// full window old; the collector has to allow for that lag instead of
+/// collecting the group whose turn it was not.
+#[test]
+fn groups_pulling_in_turn_are_never_collected_by_each_other() {
+    let mut host = Host::new();
+    let mut cookie_a = host.first_pull("g-a")["cookie"].clone();
+    let mut cookie_b = host.first_pull("g-b")["cookie"].clone();
+
+    for i in 0..(RETAIN * 6) {
+        host.write(&format!("n{i}"), 0);
+        cookie_a = host.pull("g-a", cookie_a)["cookie"].clone();
+        cookie_b = host.pull("g-b", cookie_b)["cookie"].clone();
+        for group in ["g-a", "g-b"] {
+            assert!(
+                host.count("_zsync_queries", group) > 0,
+                "{group} lost its query definitions after write {i}"
+            );
+            assert!(
+                host.count("_zsync_query_rows", group) > 0,
+                "{group} lost its membership after write {i}"
+            );
+        }
+    }
+
+    // both still receive diffs: a new open issue reaches each of them.
+    host.write("fresh", 0);
+    for (group, cookie) in [("g-a", cookie_a), ("g-b", cookie_b)] {
+        let next = host.pull(group, cookie);
+        let puts = next["rowsPatch"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|op| op["op"] == "put" && op["value"]["id"] == "fresh")
+            .count();
+        assert_eq!(puts, 1, "{group} must still be served row diffs");
+    }
+}
+
+/// A collected group that comes back with only its old cookie, which is what a
+/// Zero client does mid-connection, must still be served its rows: the pull
+/// carries no query patch, so the server has to recompute from the retained
+/// definitions.
+#[test]
+fn a_collected_group_that_comes_back_without_re_registering_is_served_again() {
+    let mut host = Host::new();
+    let stale = host.first_pull("g-returns")["cookie"].clone();
+
+    let mut cookie = host.first_pull("g-other")["cookie"].clone();
+    for i in 0..(RETAIN * 4) {
+        host.write(&format!("n{i}"), 0);
+        cookie = host.pull("g-other", cookie)["cookie"].clone();
+    }
+    host.prune();
+    host.pull("g-other", cookie);
+    assert_eq!(
+        host.count("_zsync_query_rows", "g-returns"),
+        0,
+        "the fixture must have collected the returning group"
+    );
+
+    let back = host.pull("g-returns", stale);
+    let ops = back["rowsPatch"].as_array().unwrap();
+    assert_eq!(
+        ops[0]["op"], "clear",
+        "a below-floor cookie is a full snapshot"
+    );
+    let puts = ops.iter().filter(|op| op["op"] == "put").count();
+    assert!(puts > 0, "a returning group must be served its rows again");
+    assert!(host.count("_zsync_query_rows", "g-returns") > 0);
+    let got = back["gotQueries"]["patch"].as_array().unwrap();
+    assert!(
+        got.iter()
+            .any(|op| op["op"] == "put" && op["hash"] == "h-open"),
+        "its query is acknowledged as got again"
     );
 }

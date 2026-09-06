@@ -215,7 +215,7 @@ pub fn handle_query_pull(
     // query layer is where those tables exist, and this is the only path that
     // creates them.
     if store::prune(db, retain_changes)? {
-        super::membership::collect_abandoned_client_groups(db)?;
+        super::membership::collect_abandoned_client_groups(db, retain_changes)?;
     }
     let current = store::watermark(db)?;
     if let Some(c) = cookie
