@@ -4,6 +4,8 @@ export { sleep } from './async/sleep.js'
 export { isActiveElementFormField } from './browser/isActiveElementFormField.js'
 export { openCenteredPopup } from './browser/openPopup.js'
 export { EMPTY_OBJECT } from './constants.js'
+export { AbortError, AppError, EnsureError } from './error/errors.js'
+export type { ErrorCode } from './error/errors.js'
 export {
   Emitter,
   createEmitter,
