@@ -1008,4 +1008,78 @@ describe('createOrezDataWorker', () => {
     })
     expect(readyVersion).toBe('schema-owned-by-do')
   })
+  it('converges the schema before serving application sql that arrives over rpc', async () => {
+    const order: string[] = []
+    const runtime = createOrezDataWorker({
+      name: 'testapp',
+      schema: {
+        ...descriptor,
+        version: 'schema-v8',
+        migrate: async () => {
+          order.push('migrate')
+        },
+      },
+    })
+    let readyVersion: string | null = null
+    const zero = Object.create(runtime.ZeroDO.prototype) as any
+    zero.orezStorage = {
+      sql: {
+        exec(sql: string, ...params: unknown[]) {
+          if (sql.startsWith('SELECT version FROM _orez_application_schema ')) {
+            return {
+              toArray: () => (readyVersion ? [{ version: readyVersion }] : []),
+            }
+          }
+          if (sql.startsWith('DELETE FROM _orez_application_schema ')) {
+            readyVersion = null
+            return { toArray: () => [] }
+          }
+          if (sql.startsWith('INSERT INTO _orez_application_schema ')) {
+            readyVersion = String(params[0])
+            return { toArray: () => [] }
+          }
+          if (sql.includes('_orez_application_schema_attempt')) {
+            return { toArray: () => [] }
+          }
+          throw new Error(`unexpected durable SQL: ${sql}`)
+        },
+      },
+    }
+    zero.orezInstance = 'ns:proj-unsynced'
+    zero.applicationSqlLocalClient = () => ({})
+    zero.orezRestoreInProgress = () => false
+    zero.invalidateSchemaCaches = () => {}
+    zero.orezSchemaRunVersion = null
+    zero.orezSchemaRun = null
+    zero.orezReadyVersion = null
+    zero.orezWorkerVersion = 'worker-1'
+    zero.withLocalApplicationSqlSession = async (
+      _readOnly: boolean,
+      work: (session: { query: () => Promise<unknown[]> }) => unknown
+    ) =>
+      work({
+        query: async () => {
+          order.push('query')
+          return [{ ok: 1 }]
+        },
+      })
+    zero.openApplicationSqlSession = () => {
+      order.push('session')
+      return { state: 'open' }
+    }
+
+    // a namespace that was never reconciled: the first statement over rpc
+    // runs the migration before anything else touches the tables
+    await expect(zero.applicationSqlQuery('SELECT 1')).resolves.toEqual([{ ok: 1 }])
+    await zero.applicationSqlSession('session-1', {})
+    expect(order).toEqual(['migrate', 'query', 'session'])
+    expect(readyVersion).toBe('schema-v8')
+
+    // once the marker is read, later statements pay nothing
+    zero.orezStorage.sql.exec = () => {
+      throw new Error('a converged namespace must not re-read its schema marker')
+    }
+    await zero.applicationSqlQuery('SELECT 1')
+    expect(order.filter((step) => step === 'migrate')).toHaveLength(1)
+  })
 })

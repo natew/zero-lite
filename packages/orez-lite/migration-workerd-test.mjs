@@ -126,27 +126,34 @@ export default {
       return Response.json({ copyMs, beforeMarker, afterMarker, before, after, copied, triggers, dropped })
     }
     if (action === 'seed') {
-      const client = dataWorker.applicationSqlClient(env, namespace)
-      await client.transaction(
-        () => { throw new Error('migration cost fixture does not compile query ASTs') },
-        async (tx) => {
-          await tx.exec(
-            'CREATE TABLE IF NOT EXISTS "__contrast_cf_migrations" (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)'
-          )
-          await tx.exec(
-            'INSERT INTO "__contrast_cf_migrations" (id, applied_at) VALUES (?, ?)',
-            ['0001_retired/migration.sql:0:previous-hash', 1]
-          )
-          for (let index = 0; index < 1000; index++) {
-            await tx.exec(
-              'INSERT INTO "__contrast_cf_migrations" (id, applied_at) VALUES (?, ?)',
-              ['historical-' + String(index).padStart(4, '0') + ':hash', 1]
-            )
-          }
-        }
-      )
+      // a namespace with ledger history but no reconciled schema. application
+      // sql over rpc would converge the schema first, so the history lands the
+      // way a restore does: straight into the object, past that check.
+      const stub = env.ZERO_SQL_DO.get(env.ZERO_SQL_DO.idFromName(instance))
+      await stub.orezImportBatch([
+        {
+          sql: 'CREATE TABLE IF NOT EXISTS "__contrast_cf_migrations" (id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)',
+        },
+        {
+          sql: 'INSERT INTO "__contrast_cf_migrations" (id, applied_at) VALUES (?, ?)',
+          params: ['0001_retired/migration.sql:0:previous-hash', 1],
+        },
+        ...Array.from({ length: 1000 }, (_, index) => ({
+          sql: 'INSERT INTO "__contrast_cf_migrations" (id, applied_at) VALUES (?, ?)',
+          params: ['historical-' + String(index).padStart(4, '0') + ':hash', 1],
+        })),
+      ])
       notificationAttempts.set(instance, 0)
       return Response.json({ ok: true })
+    }
+    if (action === 'first-touch') {
+      // a never-reconciled namespace reached only by raw application sql
+      const client = dataWorker.applicationSqlClient(env, namespace)
+      return Response.json(
+        await client.query(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('alpha', 'beta') ORDER BY name"
+        )
+      )
     }
     if (action === 'migrate') {
       const result = await dataWorker.ensureNamespaceSchema(env, namespace, { force: true })
@@ -264,16 +271,22 @@ try {
   // the 588 current ids take 19 primary-key probe statements. unmatched
   // historical rows do not add reads; the previous scan read all 1,001 rows
   // once per session while opening prepare + one session per file + finalize.
-  // the write count fell when the schema snapshot stopped being rewritten on
-  // every DDL transaction; a statement list sent through execMany costs the
-  // same rows and statements as the same list sent one call at a time.
+  // a statement list sent through execMany costs the same rows and statements
+  // as the same list sent one call at a time. the seed lands like a restore,
+  // so the ledger table arrives with no transaction journal or schema
+  // snapshot; the migration's first write to it records both here.
   assert.deepEqual(cost, {
-    rowsRead: 954,
-    rowsWritten: 30,
+    rowsRead: 897,
+    rowsWritten: 44,
     sessions: 2,
-    statements: 81,
+    statements: 86,
     callbacks: 0,
   })
+  // raw application sql on a namespace nobody migrated converges the schema
+  // before the statement runs, so the tables it asks for already exist
+  const firstTouch = await fetch(`${base}/first-touch/proj-untouched-${crypto.randomUUID()}`)
+  assert.equal(firstTouch.status, 200, await firstTouch.clone().text())
+  assert.deepEqual(await firstTouch.json(), [{ name: 'alpha' }, { name: 'beta' }])
   const proofResponse = await fetch(
     `${base}/backup-proof/proj-backup-${crypto.randomUUID()}`,
     { method: 'POST' }

@@ -778,6 +778,18 @@ export function createOrezDataWorker<
       )
     }
 
+    // application sql used to reach a namespace whose schema had never been
+    // reconciled: only the sync feeds asked for the schema first, so a
+    // namespace nobody synced stayed on its creation-time tables after a deploy
+    // added new ones and answered `no such table`. every rpc statement now
+    // converges the schema first. the ready check is one in-memory compare once
+    // the marker has been read, and the run itself is shared with any feed
+    // that asked at the same time.
+    protected override async admitApplicationSql(): Promise<void> {
+      if (this.orezApplicationSchemaReady()) return
+      await this.orezRunApplicationSchema(schemaVersion, this.orezInstance)
+    }
+
     async orezRunApplicationSchema(
       requestedSchemaVersion: string,
       instance: string,

@@ -2100,7 +2100,7 @@ export class ZeroDO extends DurableObject {
     work: () => Value | Promise<Value>,
     signal?: AbortSignal
   ): Promise<Value> {
-    const session = await this.applicationSqlSession(crypto.randomUUID(), {
+    const session = this.openApplicationSqlSession(crypto.randomUUID(), {
       readOnly: true,
     })
     const dispose = () => session[Symbol.dispose]()
@@ -2127,7 +2127,7 @@ export class ZeroDO extends DurableObject {
     work: (session: ApplicationSqlSessionTarget) => Value | Promise<Value>,
     priority: ApplicationSqlSessionPriority = 'normal'
   ): Promise<Value> {
-    const session = await this.applicationSqlSession(crypto.randomUUID(), {
+    const session = this.openApplicationSqlSession(crypto.randomUUID(), {
       readOnly,
       priority,
     })
@@ -2214,6 +2214,15 @@ export class ZeroDO extends DurableObject {
   }
 
   /**
+   * runs before any application SQL that arrives over RPC is served. the base
+   * object has nothing to check; a subclass that owns a schema converges it
+   * here, so a statement can never reach a namespace whose tables are behind
+   * the worker's schema. work driven from inside the object (migrations, feed
+   * reads, backups) opens its sessions directly and never passes through this.
+   */
+  protected admitApplicationSql(): Promise<void> | void {}
+
+  /**
    * private durable object RPC surface for the application SQLite client. the
    * disposable target exists before admission, so a queued caller can cancel by
    * disposing it and an active one rolls its transaction back. this method is
@@ -2223,6 +2232,14 @@ export class ZeroDO extends DurableObject {
     sessionID: string,
     options: ApplicationSqlSessionOptions = {}
   ): Promise<ApplicationSqlSessionTarget> {
+    await this.admitApplicationSql()
+    return this.openApplicationSqlSession(sessionID, options)
+  }
+
+  private openApplicationSqlSession(
+    sessionID: string,
+    options: ApplicationSqlSessionOptions = {}
+  ): ApplicationSqlSessionTarget {
     if (!sessionID) throw new TypeError('application SQLite session id is required')
     const priority = options.priority ?? 'normal'
     if (
@@ -2262,6 +2279,7 @@ export class ZeroDO extends DurableObject {
     params: readonly unknown[] = [],
     options: Pick<ApplicationSqlSessionOptions, 'priority'> = {}
   ): Promise<Row[]> {
+    await this.admitApplicationSql()
     return this.withLocalApplicationSqlSession(
       true,
       (session) => session.query<Row>(sql, params),
