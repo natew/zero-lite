@@ -54,6 +54,33 @@ delivery. The callbacks keep authentication, authorization, and query policy in
 the application. Storage retention is disabled unless the application
 explicitly supplies `workerRetention`.
 
+Local application SQL uses the Node SQLite adapter from `orez-lite/local`:
+
+```ts
+import { createLocalApplicationSqlClientFactory } from 'orez-lite/local'
+
+const clients = createLocalApplicationSqlClientFactory({
+  dataDir: '.orez/application-sql',
+})
+const applicationSql = clients('app')
+await applicationSql.transaction(compileQuery, async (tx) => {
+  await tx.exec('INSERT INTO item (id) VALUES (?)', ['first'])
+  return tx.query('SELECT * FROM item')
+})
+// after the server stops accepting work
+await clients.close()
+```
+
+Use one factory per data directory in each server process. It caches one WAL
+connection per namespace and serializes async transactions on that connection.
+A rejected callback rolls back; nested transactions through the same factory
+reject immediately. `close()` drains accepted work and closes the connections.
+The transaction supports `exec`, `execMany`, `query`, and `queryAst` with the
+existing application query compiler and optional query budget. Local sync table
+registration belongs to `defineLocalConfig().schema`; this adapter does not
+implement Durable Object registration or read-lane admission. The adapter
+requires Node's `node:sqlite` and belongs in server setup, never a client bundle.
+
 Application development normally uses the higher-level local configuration:
 
 ```ts

@@ -1,3 +1,10 @@
+export { createLocalApplicationSqlClientFactory } from './local-application-sql.js'
+export type {
+  LocalApplicationSqlClient,
+  LocalApplicationSqlClientFactory,
+  LocalApplicationSqlTransaction,
+} from './local-application-sql.js'
+
 import { type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { resolve } from 'node:path'
