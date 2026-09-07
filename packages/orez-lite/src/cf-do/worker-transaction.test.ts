@@ -258,6 +258,211 @@ describe('ZeroDO trusted application transaction', () => {
     }
   })
 
+  it('joins slow client phases to the actual database session without changing its result', async () => {
+    const { createApplicationSqlClient } = await import('./application-sql.js')
+    const { zero } = await createTestZero(async (work) => await work())
+    zero.sqlTelemetrySampleRate = 1
+    let now = 0
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const databaseEvents: Record<string, unknown>[] = []
+    const clientEvents: Record<string, unknown>[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((value) => {
+      databaseEvents.push(JSON.parse(String(value)))
+    })
+    const info = vi.spyOn(console, 'info').mockImplementation((value) => {
+      clientEvents.push(JSON.parse(String(value)))
+    })
+    let sessionID = ''
+    let disposed = false
+    const client = createApplicationSqlClient(
+      {
+        idFromName: () => 'id',
+        get: () => ({
+          applicationSqlQuery: async () => [],
+          applicationSqlSession: async (id, options) => {
+            sessionID = id
+            now += 40
+            const session = await zero.applicationSqlSession(id, options)
+            const begin = session.begin.bind(session)
+            const commit = session.commit.bind(session)
+            const dispose = session[Symbol.dispose].bind(session)
+            vi.spyOn(session, 'begin').mockImplementation(async () => {
+              await begin()
+              now += 600
+            })
+            vi.spyOn(session, 'commit').mockImplementation(async () => {
+              await commit()
+              now += 30
+            })
+            vi.spyOn(session, Symbol.dispose).mockImplementation(() => {
+              dispose()
+              disposed = true
+              now += 5
+            })
+            return session
+          },
+        }),
+      },
+      'test-phase-timing'
+    )
+    try {
+      const value = await client.readTransaction(unusedCompiler, async (tx) => {
+        now += 75
+        return tx.query('SELECT id, enabled FROM item')
+      })
+      expect(value).toEqual([{ id: 'row-1', enabled: 1 }])
+      expect(disposed).toBe(true)
+      expect(clientEvents).toHaveLength(1)
+      expect(clientEvents[0]).toMatchObject({
+        event: 'orez_application_sql_session_slow',
+        sessionID,
+        namespace: 'test-phase-timing',
+        readOnly: true,
+        outcome: 'completed',
+        durationMs: 750,
+        phases: {
+          open: 40,
+          begin: 600,
+          work: 75,
+          commit: 30,
+          rollback: null,
+          dispose: 5,
+        },
+      })
+      expect(clientEvents[0]?.caller).toContain('worker-transaction.test.ts')
+      expect(databaseEvents).toHaveLength(1)
+      expect(databaseEvents[0]).toMatchObject({
+        event: 'orez_sql_transaction_sample',
+        sessionID,
+        queueMs: 0,
+        durationMs: 675,
+        statements: 1,
+      })
+    } finally {
+      clock.mockRestore()
+      log.mockRestore()
+      info.mockRestore()
+    }
+  })
+
+  it('emits nothing for a fast session and keeps the original error when a slow one fails', async () => {
+    const { createApplicationSqlClient } = await import('./application-sql.js')
+    const { zero } = await createTestZero(async (work) => await work())
+    let now = 0
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const clientEvents: Record<string, unknown>[] = []
+    let logThrows = false
+    const info = vi.spyOn(console, 'info').mockImplementation((value) => {
+      if (logThrows) throw new Error('log sink down')
+      clientEvents.push(JSON.parse(String(value)))
+    })
+    let rolledBack = 0
+    let disposed = 0
+    const client = createApplicationSqlClient(
+      {
+        idFromName: () => 'id',
+        get: () => ({
+          applicationSqlQuery: async () => [],
+          applicationSqlSession: async (id, options) => {
+            const session = await zero.applicationSqlSession(id, options)
+            const rollback = session.rollback.bind(session)
+            const dispose = session[Symbol.dispose].bind(session)
+            vi.spyOn(session, 'rollback').mockImplementation(async () => {
+              await rollback()
+              rolledBack++
+              now += 20
+            })
+            vi.spyOn(session, Symbol.dispose).mockImplementation(() => {
+              dispose()
+              disposed++
+            })
+            return session
+          },
+        }),
+      },
+      'test-phase-controls'
+    )
+    try {
+      const fast = await client.readTransaction(unusedCompiler, async (tx) => {
+        now += 499
+        return tx.query('SELECT id, enabled FROM item')
+      })
+      expect(fast).toEqual([{ id: 'row-1', enabled: 1 }])
+      expect(clientEvents).toEqual([])
+
+      const failure = new Error('business rule')
+      await expect(
+        client.readTransaction(unusedCompiler, async () => {
+          now += 700
+          throw failure
+        })
+      ).rejects.toBe(failure)
+      expect(rolledBack).toBe(1)
+      expect(disposed).toBe(2)
+      expect(clientEvents).toHaveLength(1)
+      expect(clientEvents[0]).toMatchObject({
+        event: 'orez_application_sql_session_slow',
+        outcome: 'failed',
+        durationMs: 720,
+        phases: { open: 0, begin: 0, work: 700, commit: null, rollback: 20, dispose: 0 },
+      })
+
+      logThrows = true
+      const logged = await client.readTransaction(unusedCompiler, async (tx) => {
+        now += 900
+        return tx.query('SELECT id, enabled FROM item')
+      })
+      expect(logged).toEqual([{ id: 'row-1', enabled: 1 }])
+      await expect(
+        client.readTransaction(unusedCompiler, async () => {
+          now += 900
+          throw failure
+        })
+      ).rejects.toBe(failure)
+      expect(disposed).toBe(4)
+    } finally {
+      clock.mockRestore()
+      info.mockRestore()
+    }
+  })
+
+  it('names a slow schema admission by the session id the client will report', async () => {
+    const { zero } = await createTestZero(async (work) => await work())
+    zero.sqlTelemetrySampleRate = 1
+    let now = 0
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const admissions: Record<string, unknown>[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((value) => {
+      const record = JSON.parse(String(value))
+      if (record.event === 'orez_sql_admission_sample') admissions.push(record)
+    })
+    zero.admitApplicationSql = async () => {
+      now += 350
+    }
+    try {
+      using session = await zero.applicationSqlSession('admitted-session', {
+        readOnly: true,
+      })
+      expect(session).toBeDefined()
+      expect(admissions).toEqual([
+        {
+          event: 'orez_sql_admission_sample',
+          sessionID: 'admitted-session',
+          durationMs: 350,
+        },
+      ])
+      zero.admitApplicationSql = () => {}
+      using instant = await zero.applicationSqlSession('instant-session', {
+        readOnly: true,
+      })
+      expect(instant).toBeDefined()
+      expect(admissions).toHaveLength(1)
+    } finally {
+      clock.mockRestore()
+      log.mockRestore()
+    }
+  })
+
   it('binds the private application client to one Durable Object namespace', async () => {
     const { createApplicationSqlClient } = await import('./application-sql.js')
     const calls: unknown[] = []

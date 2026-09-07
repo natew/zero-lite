@@ -305,27 +305,100 @@ async function raceAbort<Value>(
 
 async function withApplicationSqlSession<Value>(
   target: ApplicationSqlRpc,
+  namespace: string,
   signal: AbortSignal | undefined,
   sessionOptions: ApplicationSqlSessionOptions,
   work: (session: ApplicationSqlSessionRpc) => Value | Promise<Value>
 ): Promise<Value> {
-  using session = await target.applicationSqlSession(crypto.randomUUID(), sessionOptions)
+  const sessionID = crypto.randomUUID()
+  const caller = new Error()
+  const startedAt = performance.now()
+  let phaseStartedAt = startedAt
+  const phases: Record<
+    'open' | 'begin' | 'work' | 'commit' | 'rollback' | 'dispose',
+    number | null
+  > = {
+    open: null,
+    begin: null,
+    work: null,
+    commit: null,
+    rollback: null,
+    dispose: null,
+  }
+  let phase: keyof typeof phases = 'open'
+  let completed = false
   try {
-    // the durable object grants turns in priority and arrival order, so this
-    // settles the moment the turn is this session's rather than on the next poll tick.
-    // cancellation races the grant; rollback then drops the queued session.
-    await raceAbort(signal, session.begin())
-    const value = await raceAbort(signal, Promise.resolve(work(session)))
-    signal?.throwIfAborted()
-    if (sessionOptions.priority === 'background') {
-      applicationSqlPreemptibleValue(await session.commitPreemptible())
-    } else {
-      await session.commit()
+    let value: Value
+    {
+      using session = await target.applicationSqlSession(sessionID, sessionOptions)
+      const openedAt = performance.now()
+      phases.open = openedAt - phaseStartedAt
+      phase = 'begin'
+      phaseStartedAt = openedAt
+      try {
+        // admission settles when the durable object grants this session its turn.
+        await raceAbort(signal, session.begin())
+        const admittedAt = performance.now()
+        phases.begin = admittedAt - phaseStartedAt
+        phase = 'work'
+        phaseStartedAt = admittedAt
+        value = await raceAbort(signal, Promise.resolve(work(session)))
+        signal?.throwIfAborted()
+        const workedAt = performance.now()
+        phases.work = workedAt - phaseStartedAt
+        phase = 'commit'
+        phaseStartedAt = workedAt
+        if (sessionOptions.priority === 'background') {
+          applicationSqlPreemptibleValue(await session.commitPreemptible())
+        } else {
+          await session.commit()
+        }
+        const committedAt = performance.now()
+        phases.commit = committedAt - phaseStartedAt
+        phase = 'dispose'
+        phaseStartedAt = committedAt
+        completed = true
+      } catch (error) {
+        const failedAt = performance.now()
+        phases[phase] = failedAt - phaseStartedAt
+        phase = 'rollback'
+        phaseStartedAt = failedAt
+        await session.rollback().catch(() => {})
+        const rolledBackAt = performance.now()
+        phases.rollback = rolledBackAt - phaseStartedAt
+        phase = 'dispose'
+        phaseStartedAt = rolledBackAt
+        throw error
+      }
     }
     return value
-  } catch (error) {
-    await session.rollback().catch(() => {})
-    throw error
+  } finally {
+    const finishedAt = performance.now()
+    phases[phase] = finishedAt - phaseStartedAt
+    if (finishedAt - startedAt >= 500) {
+      // join client round trips with database queue and hold times by session id.
+      // logging must never replace the original result or error.
+      try {
+        console.info(
+          JSON.stringify({
+            event: 'orez_application_sql_session_slow',
+            sessionID,
+            namespace: namespace.slice(0, 200),
+            readOnly: sessionOptions.readOnly === true,
+            priority: sessionOptions.priority ?? 'normal',
+            outcome: completed ? 'completed' : 'failed',
+            durationMs: Math.round(finishedAt - startedAt),
+            phases: Object.fromEntries(
+              Object.entries(phases).map(([name, ms]) => [
+                name,
+                ms === null ? null : Math.round(ms),
+              ])
+            ),
+            caller: caller.stack?.split('\n').slice(1).join('\n').slice(0, 2048),
+          })
+        )
+      } catch {}
+    }
   }
 }
 
@@ -342,6 +415,7 @@ export function createApplicationSqlClient(
   ) =>
     withApplicationSqlSession(
       target,
+      namespace,
       options.signal,
       options.priority
         ? { ...sessionOptions, priority: options.priority }

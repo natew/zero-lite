@@ -560,11 +560,13 @@ export class ZeroDO extends DurableObject {
     }
   }
 
-  private startSqlTelemetrySample(): SqlTelemetrySample | null {
+  private sqlTelemetrySampled(): boolean {
     const rate = Number(this.sqlTelemetrySampleRate)
-    if (!Number.isFinite(rate) || rate <= 0 || (rate < 1 && Math.random() >= rate)) {
-      return null
-    }
+    return Number.isFinite(rate) && rate > 0 && (rate >= 1 || Math.random() < rate)
+  }
+
+  private startSqlTelemetrySample(): SqlTelemetrySample | null {
+    if (!this.sqlTelemetrySampled()) return null
     return {
       startedAt: performance.now(),
       admittedAt: null,
@@ -589,7 +591,8 @@ export class ZeroDO extends DurableObject {
     outcome: 'committed' | 'error' | 'rolled_back' | 'success',
     sample: SqlTelemetrySample | null,
     error?: unknown,
-    attribution?: WriteAttributionFields | null
+    attribution?: WriteAttributionFields | null,
+    sessionID?: string
   ): void {
     if (!sample) return
     try {
@@ -597,6 +600,7 @@ export class ZeroDO extends DurableObject {
         JSON.stringify({
           event,
           name: name.slice(0, 200),
+          ...(sessionID ? { sessionID: sessionID.slice(0, 200) } : null),
           outcome,
           durationMs: Math.round((performance.now() - sample.startedAt) * 1_000) / 1_000,
           ...(sample.admittedAt === null
@@ -656,7 +660,8 @@ export class ZeroDO extends DurableObject {
       outcome,
       session.telemetry,
       error,
-      attribution
+      attribution,
+      session.sessionID
     )
   }
 
@@ -2232,7 +2237,26 @@ export class ZeroDO extends DurableObject {
     sessionID: string,
     options: ApplicationSqlSessionOptions = {}
   ): Promise<ApplicationSqlSessionTarget> {
-    await this.admitApplicationSql()
+    // a subclass converging its schema here can wait behind this namespace's
+    // writer, and the client only sees that as a long open phase. name it by
+    // the same session id so the client record joins to the cause.
+    const startedAt = performance.now()
+    const admission = this.admitApplicationSql()
+    if (admission) {
+      await admission
+      const durationMs = performance.now() - startedAt
+      if (durationMs >= 1 && this.sqlTelemetrySampled()) {
+        try {
+          console.log(
+            JSON.stringify({
+              event: 'orez_sql_admission_sample',
+              sessionID: sessionID.slice(0, 200),
+              durationMs: Math.round(durationMs * 1_000) / 1_000,
+            })
+          )
+        } catch {}
+      }
+    }
     return this.openApplicationSqlSession(sessionID, options)
   }
 
