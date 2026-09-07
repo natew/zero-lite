@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 
 import * as zero from '@rocicorp/zero'
+import * as v from 'valibot'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import {
@@ -84,6 +85,97 @@ describe('generate', () => {
     await generate({ dir: testDir, silent: true, force: true })
 
     expect(existsSync(syncedQueriesPath)).toBe(true)
+  })
+
+  test('generates every crud slot for a default table registration', async () => {
+    writeFileSync(
+      join(testDir, 'post/mutations.ts'),
+      `
+export const schema = table('post').columns({ id: string(), title: string() }).primaryKey('id')
+export const mutate = mutations(schema, permission, {
+  publish: async (ctx, args: { id: string }) => {},
+})
+`
+    )
+
+    await generate({ dir: testDir, silent: true })
+    const output = readFileSync(join(testDir, 'generated/syncedMutations.ts'), 'utf-8')
+
+    for (const slot of ['insert', 'update', 'delete', 'upsert']) {
+      expect(output).toContain(`    ${slot}: v.object({`)
+    }
+    expect(output).toContain('    publish: v.object({')
+
+    // the emitted module has to evaluate and actually validate payloads
+    const context = { v, exports: {} as { mutationValidators?: any } }
+    runInNewContext(
+      output
+        .replace(/^import .*$/m, '')
+        .replace('export const', 'exports.mutationValidators ='),
+      context
+    )
+    const validators = context.exports.mutationValidators!.post
+
+    expect(v.parse(validators.upsert, { id: 'a', title: 'hello' })).toEqual({
+      id: 'a',
+      title: 'hello',
+    })
+    // upsert takes the insert shape, so a missing non-optional column is rejected
+    expect(() => v.parse(validators.upsert, { id: 'a' })).toThrow()
+    // update keeps the primary key required and every other column optional
+    expect(v.parse(validators.update, { id: 'a' })).toEqual({ id: 'a' })
+    expect(() => v.parse(validators.update, { title: 'hello' })).toThrow()
+    // delete is keyed by the primary key alone
+    expect(v.parse(validators.delete, { id: 'a' })).toEqual({ id: 'a' })
+  })
+
+  test('emits only authored handlers when a registration opts out with crud false', async () => {
+    writeFileSync(
+      join(testDir, 'post/mutations.ts'),
+      `
+export const schema = table('post').columns({ id: string(), title: string() }).primaryKey('id')
+export const mutate = mutations(
+  schema,
+  permission,
+  {
+    publish: async (ctx, args: { id: string }) => {},
+  },
+  { crud: false }
+)
+`
+    )
+
+    await generate({ dir: testDir, silent: true })
+    const output = readFileSync(join(testDir, 'generated/syncedMutations.ts'), 'utf-8')
+
+    expect(output).toContain('    publish: v.object({')
+    for (const slot of ['insert', 'update', 'delete', 'upsert']) {
+      expect(output).not.toContain(`    ${slot}:`)
+    }
+    // the options object must never be read as the handlers object
+    expect(output).not.toContain('crud:')
+  })
+
+  test('reads handlers from the third argument, never the options or permissions argument', async () => {
+    writeFileSync(
+      join(testDir, 'post/mutations.ts'),
+      `
+export const schema = table('post').columns({ id: string() }).primaryKey('id')
+export const mutate = mutations(schema, permission, { publish: async (ctx, args: { id: string }) => {} }, { crud: true })
+`
+    )
+    writeFileSync(
+      join(testDir, 'note/mutations.ts'),
+      `export const mutate = mutations('note', { shouldNotBeAHandler: async (ctx, args: { id: string }) => {} })`
+    )
+
+    await generate({ dir: testDir, silent: true })
+    const output = readFileSync(join(testDir, 'generated/syncedMutations.ts'), 'utf-8')
+
+    expect(output).toContain('    publish: v.object({')
+    expect(output).not.toContain('crud:')
+    // arg 1 is permissions at runtime, so a two-arg named call authors no handlers
+    expect(output).not.toContain('shouldNotBeAHandler')
   })
 })
 

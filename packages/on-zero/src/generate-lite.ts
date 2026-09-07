@@ -15,6 +15,7 @@
 // contexts without pulling in ~10mb of typescript.
 
 import {
+  CRUD_MUTATION_NAMES,
   generateAggregatesFile,
   generateGroupedQueriesFile,
   generateInstancesFile,
@@ -38,7 +39,7 @@ export type LiteMutationExport = {
   // this targets membership at the named table while the model file basename
   // remains the top-level key in syncedMutations.
   modelName: string
-  // handlers = keys of the last object literal arg to `mutations(...)`
+  // handlers = keys of the handler argument, before any options argument
   handlers: Array<{
     // handler property name, e.g. 'toggleActive'
     name: string
@@ -54,6 +55,12 @@ export type LiteMutationExport = {
   // model doesn't declare a schema inline (most templates use drizzle-zero,
   // so null is common).
   schema: LiteSchemaInfo | null
+  // the `crud` field of the fourth options argument, i.e. false for
+  // `mutations(table, permissions, handlers, { crud: false })`. omitted or
+  // undefined means the default, which generates the full crud slot set.
+  // permissions stay registered either way, so this only controls the
+  // generated insert/update/delete/upsert validators.
+  crud?: boolean
 }
 
 export type LiteSchemaInfo = {
@@ -514,15 +521,15 @@ export function generateLite(opts: LiteGenerateOptions): LiteGenerateResult {
     }
 
     // a model participates in crud only when it has a schema AND its mutate
-    // call is `mutations(schema, perm)` / `mutations(schema, perm, { ... })`.
-    // in the lite ast, we don't know the call arity directly, so we use the
-    // presence of a schema as the signal. this matches the real generator's
+    // call did not opt out with `{ crud: false }`. in the lite ast, we don't
+    // know the call arity directly, so we use the presence of a schema as the
+    // signal for a table registration. this matches the real generator's
     // behavior for schemas-with-mutate: hasCRUD is true whenever both exist.
     //
     // models without `export const mutate` still appear in the output as
     // empty entries — see the test "treats models without export const mutate
     // as empty mutations".
-    const hasCRUD = hasSchema && mutationExport !== null
+    const hasCRUD = hasSchema && mutationExport !== null && mutationExport.crud !== false
 
     const custom = (mutationExport?.handlers ?? []).map((h) => {
       // null or empty annotation → void (no second param) → v.void_()
@@ -821,13 +828,13 @@ export function generateLite(opts: LiteGenerateOptions): LiteGenerateResult {
     )
   }
 
-  // count mutations the same way `generate()` does: 3 per crud model plus
-  // non-crud custom mutations (the crud-ops set is excluded when hasCRUD).
+  // count mutations the same way `generate()` does: one per generated crud slot
+  // plus non-crud custom mutations (the crud-ops set is excluded when hasCRUD).
   let mutationCount = 0
   for (const m of allModelMutations) {
-    if (m.hasCRUD) mutationCount += 3
+    if (m.hasCRUD) mutationCount += CRUD_MUTATION_NAMES.length
     mutationCount += m.custom.filter(
-      (mut) => !m.hasCRUD || !['insert', 'update', 'delete', 'upsert'].includes(mut.name)
+      (mut) => !m.hasCRUD || !CRUD_MUTATION_NAMES.some((name) => name === mut.name)
     ).length
   }
 

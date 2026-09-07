@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { basename, dirname, resolve } from 'node:path'
 
 import {
+  CRUD_MUTATION_NAMES,
   formatObjectKey,
   generateAggregatesFile,
   generateGroupedQueriesFile,
@@ -221,6 +222,57 @@ function resolveParamType(
   return result
 }
 
+// positional shape of a `mutations(...)` call, matching the runtime overloads:
+//   mutations(handlers)
+//   mutations(table, permissions)
+//   mutations(table, permissions, handlers)
+//   mutations(table, permissions, handlers, { crud: false })
+// arg 1 is always permissions and arg 3 is always options, so neither may ever
+// be read as the handlers object.
+function readMutationsCall(
+  ts: typeof import('typescript'),
+  call: import('typescript').CallExpression
+): {
+  hasTable: boolean
+  crud: boolean
+  handlersArg: import('typescript').ObjectLiteralExpression | null
+} {
+  const args = call.arguments
+
+  if (args.length < 2) {
+    const only = args[0]
+    return {
+      hasTable: false,
+      crud: false,
+      handlersArg: only && ts.isObjectLiteralExpression(only) ? only : null,
+    }
+  }
+
+  const handlers = args[2]
+  const options = args[3]
+
+  let crud = true
+  if (options && ts.isObjectLiteralExpression(options)) {
+    for (const prop of options.properties) {
+      if (!ts.isPropertyAssignment(prop)) continue
+      if (
+        !(ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name)) ||
+        prop.name.text !== 'crud'
+      )
+        continue
+      // only a literal opt-out removes the generated slots. a computed value
+      // keeps them, since extra validators are inert but missing ones are not.
+      if (prop.initializer.kind === ts.SyntaxKind.FalseKeyword) crud = false
+    }
+  }
+
+  return {
+    hasTable: true,
+    crud,
+    handlersArg: handlers && ts.isObjectLiteralExpression(handlers) ? handlers : null,
+  }
+}
+
 // find mutation handler param types in a resolver-owned source file
 // walks `export const mutate = mutations(..., { handlerName: async (ctx, param: Type) => ... })`
 function resolveMutationParamTypes(
@@ -239,16 +291,8 @@ function resolveMutationParamTypes(
     if (decl.name.getText(sourceFile) !== 'mutate') return
 
     if (!decl.initializer || !ts.isCallExpression(decl.initializer)) return
-    const args = decl.initializer.arguments
 
-    // find the handlers object (last arg that is an object literal)
-    let handlersArg: import('typescript').ObjectLiteralExpression | null = null
-    for (let i = args.length - 1; i >= 0; i--) {
-      if (ts.isObjectLiteralExpression(args[i]!)) {
-        handlersArg = args[i] as import('typescript').ObjectLiteralExpression
-        break
-      }
-    }
+    const { handlersArg } = readMutationsCall(ts, decl.initializer)
     if (!handlersArg) return
 
     for (const prop of handlersArg.properties) {
@@ -317,28 +361,11 @@ function extractMutationsFromModel(
   }
 
   const call = mutateNode as import('typescript').CallExpression
-  const args = call.arguments
 
-  // determine overload
-  // 1-arg: mutations({ ... })
-  // schema model: mutations(schema, perm) / mutations(schema, perm, { ... })
-  // named model: mutations('name', handlers) / mutations('name', perm, { ... })
-  const firstArg = args[0]
-  const hasNamedModel = Boolean(firstArg && ts.isStringLiteralLike(firstArg))
-  const hasCRUD = args.length >= 2 && !hasNamedModel
-  let handlersArg: import('typescript').ObjectLiteralExpression | null = null
-
-  if (args.length === 1 && ts.isObjectLiteralExpression(args[0]!)) {
-    handlersArg = args[0] as import('typescript').ObjectLiteralExpression
-  } else if (hasNamedModel) {
-    if (args.length >= 3 && ts.isObjectLiteralExpression(args[2]!)) {
-      handlersArg = args[2] as import('typescript').ObjectLiteralExpression
-    } else if (args.length >= 2 && ts.isObjectLiteralExpression(args[1]!)) {
-      handlersArg = args[1] as import('typescript').ObjectLiteralExpression
-    }
-  } else if (args.length === 3 && ts.isObjectLiteralExpression(args[2]!)) {
-    handlersArg = args[2] as import('typescript').ObjectLiteralExpression
-  }
+  // string-named and table-builder registrations behave identically at runtime:
+  // any 2+ arg call registers permissions and generates crud unless it opted out
+  const { hasTable, crud, handlersArg } = readMutationsCall(ts, call)
+  const hasCRUD = hasTable && crud
 
   // extract schema columns for CRUD generation
   const columns: Record<string, SchemaColumn> = {}
@@ -1327,9 +1354,9 @@ export async function generate(options: GenerateOptions): Promise<GenerateResult
 
   // count total mutations (CRUD + custom)
   for (const model of allModelMutations) {
-    if (model.hasCRUD) mutationCount += 3 // insert, update, delete
+    if (model.hasCRUD) mutationCount += CRUD_MUTATION_NAMES.length
     mutationCount += model.custom.filter(
-      (m) => !model.hasCRUD || !['insert', 'update', 'delete', 'upsert'].includes(m.name)
+      (m) => !model.hasCRUD || !CRUD_MUTATION_NAMES.some((name) => name === m.name)
     ).length
   }
 

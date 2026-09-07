@@ -37,7 +37,8 @@ function proxyRegistry(): Map<string, any> {
 // returns the SAME proxy object on subsequent calls so HMR works
 function getOrCreateMutationProxy<T extends Record<string, Function>>(
   tableName: string,
-  implementations: T
+  implementations: T,
+  crud = true
 ): T {
   // merge with any prior registration for this table: multiple modules may
   // register mutators on the same table (a seed.ts alongside the table's own
@@ -45,6 +46,11 @@ function getOrCreateMutationProxy<T extends Record<string, Function>>(
   // wholesale drops whichever module registered first. per-key replacement
   // still supports HMR updates of edited handlers.
   const prior = mutationRegistry().get(tableName)
+  if (prior && !crud) {
+    for (const action of ['insert', 'update', 'delete', 'upsert']) {
+      if (!(action in implementations)) delete prior[action]
+    }
+  }
   mutationRegistry().set(
     tableName,
     prior ? { ...prior, ...implementations } : implementations
@@ -84,19 +90,6 @@ function getOrCreateMutationProxy<T extends Record<string, Function>>(
 type MutationBuilder<Obj = any> = (ctx: MutatorContext, obj?: Obj) => Promise<void>
 type MutationBuilders = Record<string, MutationBuilder>
 
-// start of adding custom can.write(message) style
-
-// type PermissionedMutationBuilder<Permissions extends PermissionsWhere, Obj = any> = (
-//   ctx: MutatorContext & {
-//     can: any
-//   },
-//   obj?: Obj
-// ) => Promise<void>
-// type PermissionedMutationBuilders<Permissions extends PermissionsWhere> = Record<
-//   string,
-//   PermissionedMutationBuilder<Permissions>
-// >
-
 type GenericTable = TableBuilderWithColumns<any>
 
 type CRUDMutations<Table extends GenericTable> = {
@@ -107,6 +100,8 @@ type CRUDMutations<Table extends GenericTable> = {
 }
 
 type CRUDNames = 'insert' | 'upsert' | 'update' | 'delete'
+
+type MutationOptions<CRUD extends boolean = boolean> = { crud?: CRUD }
 
 type MutationsWithCRUD<Table extends GenericTable, Mutations extends MutationBuilders> = {
   [Key in CRUDNames | keyof Mutations]: Key extends keyof Mutations
@@ -127,11 +122,13 @@ export function mutations<
   Table extends GenericTable,
   Permissions extends Where,
   Mutations extends MutationBuilders,
+  CRUD extends boolean = true,
 >(
   table: Table,
   permissions: Permissions,
-  mutations: Mutations
-): MutationsWithCRUD<Table, Mutations>
+  mutations: Mutations,
+  options?: MutationOptions<CRUD>
+): CRUD extends false ? Mutations : MutationsWithCRUD<Table, Mutations>
 // string-based overloads (for drizzle-zero derived schemas where table builders aren't available)
 export function mutations<TName extends TableName, Permissions extends Where>(
   tableName: TName,
@@ -141,24 +138,34 @@ export function mutations<
   TName extends TableName,
   Permissions extends Where,
   Mutations extends MutationBuilders,
+  CRUD extends boolean = true,
 >(
   tableName: TName,
   permissions: Permissions,
-  mutations: Mutations
-): MutationsWithCRUD<SchemaTableBuilder<TName>, Mutations>
+  mutations: Mutations,
+  options?: MutationOptions<CRUD>
+): CRUD extends false
+  ? Mutations
+  : MutationsWithCRUD<SchemaTableBuilder<TName>, Mutations>
 export function mutations<
   Table extends GenericTable,
   Mutations extends Record<string, MutationBuilder>,
 >(
   table: Table | string | Mutations,
   permissions?: Where,
-  mutations?: Mutations
+  mutations?: Mutations,
+  options?: MutationOptions
 ): Mutations {
   if (permissions) {
     const tableName =
       typeof table === 'string'
         ? (table as TableName)
         : ((table as Table).schema.name as TableName)
+
+    setMutationsPermissions(tableName, permissions)
+    if (options?.crud === false) {
+      return getOrCreateMutationProxy(tableName, mutations ?? {}, false) as Mutations
+    }
 
     const createCRUDMutation = (action: CRUDNames) => {
       const customMutation = mutations?.[action]
@@ -200,8 +207,6 @@ export function mutations<
       // generated CRUD fills missing operations; custom CRUD runs as-is
       ...crudMutations,
     } as any as Mutations
-
-    setMutationsPermissions(tableName, permissions)
 
     // return proxy for HMR support - allows swapping implementations at runtime
     return getOrCreateMutationProxy(tableName, finalMutations)

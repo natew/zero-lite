@@ -220,6 +220,29 @@ permissions or throw from any other validation:
 await ctx.can(permissions, messageId)
 ```
 
+automatic CRUD is enabled by default. To expose only your declared handlers, pass
+`{ crud: false }` as the fourth argument. Permissions stay registered for
+`usePermission()` and custom handlers can still call `ctx.can()`:
+
+```ts
+export const mutate = mutations(
+  'message',
+  permissions,
+  {
+    markRead: async (ctx, input: { id: string }) => {
+      await ctx.can(permissions, input)
+      await ctx.tx.mutate.message.update({ id: input.id, isRead: true })
+    },
+  },
+  { crud: false }
+)
+```
+
+this registers only `markRead`. You can also explicitly declare an `insert`,
+`update`, `delete`, or `upsert` handler with automatic CRUD disabled. Changing
+this option during hot reload removes omitted CRUD handlers from the existing
+mutation proxy.
+
 check permissions in React with `usePermission()`:
 
 ```tsx

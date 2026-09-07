@@ -1,3 +1,6 @@
+import { runInNewContext } from 'node:vm'
+
+import * as v from 'valibot'
 import { describe, expect, test } from 'vitest'
 
 import {
@@ -70,6 +73,127 @@ describe('generated mutation validators', () => {
       id: v.string(),
     }),`)
     expect(source).toContain(`    publish: v.object({
+      id: v.string(),
+    }),`)
+  })
+
+  test('emits an upsert validator alongside the other generated crud slots', () => {
+    const source = generateSyncedMutationsFile([
+      {
+        modelName: 'post',
+        hasCRUD: true,
+        columns: {
+          id: { type: 'string', optional: false, customType: undefined },
+          title: { type: 'string', optional: true, customType: undefined },
+        },
+        primaryKeys: ['id'],
+        custom: [],
+      },
+    ])
+
+    // upsert takes the insert payload shape: every column, optionality as declared
+    expect(source).toContain(`    upsert: v.object({
+    id: v.string(),
+    title: v.optional(v.nullable(v.string())),
+  }),`)
+    expect(source).toContain('    insert: v.object({')
+    expect(source).toContain('    update: v.object({')
+    expect(source).toContain('    delete: v.object({')
+  })
+
+  test('keeps a custom upsert override instead of dropping it', () => {
+    const source = generateSyncedMutationsFile([
+      {
+        modelName: 'post',
+        hasCRUD: true,
+        columns: {
+          id: { type: 'string', optional: false, customType: undefined },
+        },
+        primaryKeys: ['id'],
+        custom: [
+          {
+            name: 'upsert',
+            paramType: '{ id: string; draft: boolean }',
+            valibotCode: 'v.object({\n    id: v.string(),\n    draft: v.boolean(),\n  })',
+          },
+        ],
+      },
+    ])
+
+    expect(source).toContain(`    upsert: v.object({
+      id: v.string(),
+      draft: v.boolean(),
+    }),`)
+    // the override replaces the generated slot rather than appearing twice
+    expect(source.match(/upsert:/g)).toHaveLength(1)
+  })
+
+  test('honors a custom unknown payload even when table columns are available', () => {
+    const source = generateSyncedMutationsFile([
+      {
+        modelName: 'post',
+        hasCRUD: true,
+        columns: { id: { type: 'string', optional: false, customType: undefined } },
+        primaryKeys: ['id'],
+        custom: [{ name: 'upsert', paramType: 'unknown', valibotCode: '' }],
+      },
+    ])
+    const validators = runInNewContext(
+      source
+        .replace("import * as v from 'valibot'", '')
+        .replace('export const mutationValidators', 'const mutationValidators') +
+        '\nmutationValidators',
+      { v }
+    )
+    expect(v.parse(validators.post.upsert, { customInput: true })).toEqual({
+      customInput: true,
+    })
+    expect(() => v.parse(validators.post.insert, { customInput: true })).toThrow()
+  })
+
+  test('emits only authored handlers when the model opted out of crud', () => {
+    const source = generateSyncedMutationsFile([
+      {
+        modelName: 'appNotification',
+        hasCRUD: false,
+        columns: {
+          id: { type: 'string', optional: false, customType: undefined },
+        },
+        primaryKeys: ['id'],
+        custom: [
+          {
+            name: 'markRead',
+            paramType: '{ id: string }',
+            valibotCode: 'v.object({\n    id: v.string(),\n  })',
+          },
+        ],
+      },
+    ])
+
+    expect(source).toContain('    markRead: v.object({')
+    for (const slot of ['insert', 'update', 'delete', 'upsert']) {
+      expect(source).not.toContain(`    ${slot}:`)
+    }
+  })
+
+  test('keeps an authored crud-named handler when there are no schema columns', () => {
+    const source = generateSyncedMutationsFile([
+      {
+        modelName: 'post',
+        hasCRUD: true,
+        columns: {},
+        primaryKeys: [],
+        custom: [
+          {
+            name: 'insert',
+            paramType: '{ id: string }',
+            valibotCode: 'v.object({\n    id: v.string(),\n  })',
+          },
+        ],
+      },
+    ])
+
+    expect(source).toContain(`    insert: v.object({
       id: v.string(),
     }),`)
   })

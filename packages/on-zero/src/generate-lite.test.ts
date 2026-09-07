@@ -457,4 +457,57 @@ describe('generateLite', () => {
       })
     ).toThrow(/uses removed instance\.ts configuration/)
   })
+  test('generates crud validators for a schema model and drops them on crud false', () => {
+    const empty = { mutations: [], queries: [] }
+    const schema = {
+      tableName: 'appNotification',
+      primaryKeys: ['id'],
+      columns: [
+        { name: 'id', builderText: 'string()' },
+        { name: 'readAt', builderText: 'number().optional()' },
+      ],
+    }
+    const handlers = [{ name: 'markRead', paramTypeText: '{ id: string }' }]
+
+    const run = (crud?: boolean) =>
+      generateLite({
+        files: { [`${DIR}/appNotification.ts`]: '// namespace' },
+        dir: DIR,
+        parse: makeParse({
+          [`${DIR}/appNotification.ts`]: {
+            ...empty,
+            mutations: [
+              {
+                modelName: 'appNotification',
+                handlers,
+                schema,
+                ...(crud === undefined ? {} : { crud }),
+              },
+            ],
+          },
+        }),
+      })
+
+    const withCRUD = run()
+    const validators = withCRUD.files['syncedMutations.ts']!
+    for (const slot of ['insert', 'update', 'delete', 'upsert']) {
+      expect(validators).toContain(`    ${slot}: v.object({`)
+    }
+    expect(validators).toContain('    markRead: v.object({')
+    // one count per generated slot plus the authored handler
+    expect(withCRUD.mutationCount).toBe(5)
+
+    const optedOut = run(false)
+    const optedOutValidators = optedOut.files['syncedMutations.ts']!
+    for (const slot of ['insert', 'update', 'delete', 'upsert']) {
+      expect(optedOutValidators).not.toContain(`    ${slot}:`)
+    }
+    expect(optedOutValidators).toContain('    markRead: v.object({')
+    expect(optedOut.mutationCount).toBe(1)
+    // the schema itself is still registered, so permissions/tables are unaffected
+    expect(optedOut.schemaCount).toBe(1)
+
+    // an explicit `{ crud: true }` is the same as omitting the options object
+    expect(run(true).files['syncedMutations.ts']).toBe(validators)
+  })
 })

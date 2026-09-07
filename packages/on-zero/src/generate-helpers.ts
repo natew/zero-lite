@@ -23,6 +23,8 @@ export type ExtractedMutation = {
 
 export type ModelMutations = {
   modelName: string
+  // true when the mutate call registers a table (any 2+ arg form) and did not
+  // opt out with `mutations(table, permissions, handlers, { crud: false })`
   hasCRUD: boolean
   // populated when hasCRUD
   columns: Record<string, SchemaColumn>
@@ -671,10 +673,16 @@ export function columnTypeToValibot(col: SchemaColumn): string {
   return col.optional ? `v.optional(v.nullable(${base}))` : base
 }
 
+// the four generated crud slots, in the order they are emitted. `upsert`
+// takes the same payload shape as `insert` (see CRUDMutations in mutations.ts).
+export const CRUD_MUTATION_NAMES = ['insert', 'update', 'delete', 'upsert'] as const
+
+export type CRUDMutationName = (typeof CRUD_MUTATION_NAMES)[number]
+
 export function schemaColumnsToValibot(
   columns: Record<string, SchemaColumn>,
   primaryKeys: string[],
-  mode: 'insert' | 'update' | 'delete'
+  mode: CRUDMutationName
 ): string {
   const entries: string[] = []
 
@@ -702,11 +710,15 @@ export function schemaColumnsToValibot(
       }
     }
   } else {
-    // insert: all columns as-is
+    // insert and upsert: all columns as-is
     for (const [name, col] of Object.entries(columns)) {
       entries.push(`${formatObjectKey(name)}: ${columnTypeToValibot(col)}`)
     }
   }
+
+  // a schema with no declared primary key yields no `delete` entries; emitting
+  // the entry list unguarded produced `v.object({ , })`, which does not parse
+  if (entries.length === 0) return 'v.object({})'
 
   return `v.object({\n    ${entries.join(',\n    ')},\n  })`
 }
@@ -748,36 +760,40 @@ export function generateSyncedMutationsFile(modelMutations: ModelMutations[]): s
     .map((model) => {
       const entries: string[] = []
 
-      // crud validators from schema
-      if (model.hasCRUD && Object.keys(model.columns).length > 0) {
-        for (const mode of ['insert', 'update', 'delete'] as const) {
-          // skip if custom mutation overrides this crud op
-          const hasCustomOverride = model.custom.some((m) => m.name === mode)
-          if (hasCustomOverride) {
-            // use the custom version's validator instead
-            const customMut = model.custom.find((m) => m.name === mode)!
-            if (customMut.valibotCode) {
-              entries.push(
-                `    ${mode}: ${indentContinuationLines(extractValibotExpression(customMut.valibotCode), 2)},`
-              )
-            } else {
-              // fall back to schema-derived
-              entries.push(
-                `    ${mode}: ${schemaColumnsToValibot(model.columns, model.primaryKeys, mode)},`
-              )
-            }
-          } else {
-            entries.push(
-              `    ${mode}: ${schemaColumnsToValibot(model.columns, model.primaryKeys, mode)},`
-            )
-          }
+      // crud validators from schema. a model that opted out with
+      // `{ crud: false }`, or that has no inline schema columns, emits nothing
+      // here and leaves any authored insert/update/delete/upsert to the custom
+      // loop below.
+      const emitted = new Set<string>()
+      const canDeriveCRUD = model.hasCRUD && Object.keys(model.columns).length > 0
+
+      for (const mode of CRUD_MUTATION_NAMES) {
+        // a custom handler with the same name replaces the generated op, so its
+        // own payload type wins over the schema-derived shape
+        const customMut = model.custom.find((m) => m.name === mode)
+        if (customMut?.valibotCode) {
+          entries.push(
+            `    ${mode}: ${indentContinuationLines(extractValibotExpression(customMut.valibotCode), 2)},`
+          )
+          emitted.add(mode)
+          continue
+        }
+        if (customMut?.paramType === 'void') {
+          entries.push(`    ${mode}: v.void_(),`)
+          emitted.add(mode)
+          continue
+        }
+        if (canDeriveCRUD && !customMut) {
+          entries.push(
+            `    ${mode}: ${schemaColumnsToValibot(model.columns, model.primaryKeys, mode)},`
+          )
+          emitted.add(mode)
         }
       }
 
       // custom mutations (excluding crud overrides already handled)
       for (const mut of model.custom) {
-        if (model.hasCRUD && ['insert', 'update', 'delete', 'upsert'].includes(mut.name))
-          continue
+        if (emitted.has(mut.name)) continue
         if (mut.paramType === 'void') {
           entries.push(`    ${mut.name}: v.void_(),`)
           continue

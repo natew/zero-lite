@@ -24,10 +24,45 @@ afterAll(() => {
   else process.env.VITE_ENVIRONMENT = previousEnvironment
 })
 
+import { getMutationsPermissions } from './modelRegistry'
 import { mutations } from './mutations'
 import { serverWhere } from './serverWhere'
 
 describe('mutations registry', () => {
+  test('explicit opt-out removes generated CRUD from existing proxies and retains permissions', async () => {
+    const record = table('closedRecord').columns({ id: string() }).primaryKey('id')
+    const permission = serverWhere('closedRecord', () => true)
+    const first = mutations(record, permission)
+    expect(Object.keys(first).sort()).toEqual(['delete', 'insert', 'update', 'upsert'])
+    const custom = vi.fn(async () => {})
+    const closed = mutations(record, permission, { custom }, { crud: false })
+    expect(closed).toBe(first)
+    expect(Object.keys(closed)).toEqual(['custom'])
+    expect('insert' in closed).toBe(false)
+    expect(Reflect.get(closed, 'upsert')).toBeUndefined()
+    expect(getMutationsPermissions('closedRecord')).toBe(permission)
+    await closed.custom()
+    expect(custom).toHaveBeenCalledOnce()
+    const reopened = mutations(record, permission, {}, { crud: true })
+    expect(Object.keys(reopened).sort()).toEqual([
+      'custom',
+      'delete',
+      'insert',
+      'update',
+      'upsert',
+    ])
+  })
+
+  test('opt-out preserves explicitly declared CRUD handlers', async () => {
+    const record = table('customRecord').columns({ id: string() }).primaryKey('id')
+    const permission = serverWhere('customRecord', () => true)
+    const insert = vi.fn(async () => {})
+    const custom = mutations(record, permission, { insert }, { crud: false })
+    expect(Object.keys(custom)).toEqual(['insert'])
+    await custom.insert()
+    expect(insert).toHaveBeenCalledOnce()
+  })
+
   test('re-registering a handler replaces it per key (HMR)', () => {
     const permissions = serverWhere('post', () => true)
     const v1 = async () => {}
@@ -143,6 +178,53 @@ describe('generated CRUD authorization', () => {
       expect(
         sqlite.prepare('SELECT * FROM document ORDER BY workspace, id').all()
       ).toEqual([{ ...own, id: 'new' }, { ...own, title: 'updated' }, foreign])
+      const closedBindings = createZeroServerBindings({
+        schema,
+        models: {
+          document: {
+            mutate: mutations(
+              document,
+              permission,
+              {
+                rename: async (
+                  ctx,
+                  input: { workspace: string; id: string; title: string }
+                ) => {
+                  await ctx.can(permission, input)
+                  await ctx.tx.mutate.document.update(input)
+                },
+              },
+              { crud: false }
+            ),
+          },
+        },
+        createServerActions: () => ({}),
+      })
+      expect(Object.keys(closedBindings.mutators)).toEqual(['document|rename'])
+      const closedExecutor = createSyncExecutor({
+        database,
+        schema,
+        mutators: closedBindings.mutators,
+        effects: {
+          runBackground: (promise) => promise,
+          report: (error) => {
+            throw error
+          },
+        },
+      })
+      for (const action of ['insert', 'update', 'delete', 'upsert']) {
+        await expect(
+          closedExecutor.execute(`document|${action}`, own, { userID: 'alice' })
+        ).rejects.toThrow(`unknown mutator: document|${action}`)
+      }
+      await closedBindings
+        .server(closedExecutor)
+        .mutate.document.rename({ workspace: 'a', id: 'same', title: 'renamed' }, auth)
+      expect(
+        sqlite
+          .prepare('SELECT title FROM document WHERE workspace = ? AND id = ?')
+          .get('a', 'same')
+      ).toEqual({ title: 'renamed' })
     } finally {
       sqlite.close()
     }
