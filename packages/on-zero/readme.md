@@ -153,13 +153,19 @@ zero.mutate.message.delete(message)
 zero.mutate.message.upsert(message)
 ```
 
+generated inserts check the resulting row; deletes check the existing row.
+updates check both. upsert checks an existing row before writing and checks the
+result afterward, so changing ownership cannot bypass the permission. rejected
+writes roll back. these checks use the server binding even when it runs in a
+browser; optimistic client writes leave authorization to the server.
+
 if you define `insert`, `upsert`, `update`, or `delete` in the third argument,
 that handler replaces the generated operation completely. on-zero does not add
 an automatic permission check or write. validate however the handler needs to;
 `ctx.can()` is available for query-based permissions, but any thrown error
 rejects and rolls back the transaction. when using `ctx.can()`, check before an
-update or delete. for an insert, write first and then check so the permission
-query can see the new row. a custom handler can no-op with a normal `return`.
+update or delete, and after an update if the resulting row must remain allowed.
+for an insert, write first and then check so the permission query can see the new row. a custom handler can no-op with a normal `return`.
 
 ## permissions
 

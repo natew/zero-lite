@@ -92,12 +92,11 @@ test('warm headless client refreshes an expired bearer and reconnects', async ()
   })
 
   try {
-    await eventually(() =>
+    await eventually(() => {
+      expect(refreshAuth).toHaveBeenCalledTimes(1)
+      expect(authorizations).toEqual(['Bearer expired-token', 'Bearer fresh-token'])
       expect(connection.zero.connection.state.current.name).toBe('connected')
-    )
-
-    expect(refreshAuth).toHaveBeenCalledTimes(1)
-    expect(authorizations).toEqual(['Bearer expired-token', 'Bearer fresh-token'])
+    })
   } finally {
     await connection.close()
   }

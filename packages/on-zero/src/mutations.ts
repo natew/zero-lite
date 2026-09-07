@@ -1,5 +1,5 @@
-import { IS_SERVER_RUNTIME } from './helpers/platform'
 import { setMutationsPermissions } from './modelRegistry'
+import { getSchema, getZQL } from './state'
 
 import type {
   MutatorContext,
@@ -165,30 +165,25 @@ export function mutations<
       if (customMutation) return customMutation
 
       return async (ctx: MutatorContext, obj: any) => {
-        /**
-         * CRUD mutations have permissions handled automatically using `can`:
-         *   - `can` throws an error if it fails
-         *     - zero catches error and rolls back transaction
-         *     - zero returns error to client when you await zero.mutate.x.z().server
-         *   - for INSERT: check runs after insert completes
-         *   - for the rest: check runs before mutation
-         */
-        const runServerPermissionCheck = async () => {
-          // only validate on the server
-          if (IS_SERVER_RUNTIME) {
+        // bound can checks authoritative writes, including browser-hosted servers.
+        // optimistic clients skip the existence read because their cache is partial.
+        if (action === 'upsert' && ctx.environment === 'server') {
+          let existing = getZQL()[tableName]
+          for (const key of getSchema().tables[tableName].primaryKey) {
+            existing = existing.where(key, obj[key])
+          }
+          if (await ctx.tx.run(existing.one())) {
             await ctx.can(permissions, obj)
           }
-        }
-
-        if (action !== 'insert' && action !== 'upsert') {
-          await runServerPermissionCheck()
+        } else if (action === 'update' || action === 'delete') {
+          await ctx.can(permissions, obj)
         }
 
         type TableName = keyof typeof ctx.tx.mutate // weird type foo because we declare this module and then type check
         await ctx.tx.mutate[tableName as TableName]![action](obj)
 
-        if (action === 'insert' || action === 'upsert') {
-          await runServerPermissionCheck()
+        if (action !== 'delete') {
+          await ctx.can(permissions, obj)
         }
       }
     }
