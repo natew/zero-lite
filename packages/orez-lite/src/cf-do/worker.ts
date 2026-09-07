@@ -384,6 +384,26 @@ type ApplicationSqlSessionState =
   | 'preempted'
   | 'closed'
 
+type ApplicationSqlTurn = {
+  sessionID: string
+  readOnly: boolean
+  priority: ApplicationSqlSessionPriority
+  admittedAt: number
+  releasedAt: number
+  statements: number
+}
+
+type ApplicationSqlGrantStall = {
+  sessionID: string
+  readOnly: boolean
+  priority: ApplicationSqlSessionPriority
+  queuedAt: number
+  admittedAt: number
+  waitMs: number
+  queueDepth: number
+  holders: ApplicationSqlTurn[]
+}
+
 type ApplicationSqlWaiter = {
   session: ApplicationSqlSessionTarget
   queuedAt: number
@@ -432,6 +452,8 @@ class ApplicationSqlSessionTarget extends RpcTarget {
    */
   changedData = false
   telemetryFinished = false
+  admittedAt = 0
+  statements = 0
 
   constructor(
     readonly owner: ZeroDO,
@@ -551,6 +573,8 @@ export class ZeroDO extends DurableObject {
   private backupSnapshotID: string | null = null
   private backupMaintenance = false
   private applicationSqlQueue: ApplicationSqlWaiter[] = []
+  private applicationSqlTurns: ApplicationSqlTurn[] = []
+  private applicationSqlGrantStalls: ApplicationSqlGrantStall[] = []
   protected applicationSqlDidCommit(_published: boolean, _changedData: boolean): void {}
 
   private durableObjectIdentity(): { objectId: string; objectName: string | null } {
@@ -1117,6 +1141,7 @@ export class ZeroDO extends DurableObject {
         queuedReaders: queuedReadSessions,
         queuedWriters: this.applicationSqlQueue.length - queuedReadSessions,
         writeGrantWaitMs: this.writeGrantWaitMs.status(),
+        grantStalls: this.applicationSqlGrantStalls,
       },
       writeBudget: {
         enabled: !this.writeBudgetDisabled,
@@ -1982,15 +2007,43 @@ export class ZeroDO extends DurableObject {
       if (!this.canAdmitApplicationSqlSession(waiter.session)) return
       this.applicationSqlQueue.shift()
       clearTimeout(waiter.timer)
+      const now = performance.now()
       waiter.session.state = 'active'
+      waiter.session.admittedAt = now
       if (waiter.session.telemetry) {
-        waiter.session.telemetry.admittedAt = performance.now()
+        waiter.session.telemetry.admittedAt = now
       }
       if (waiter.session.readOnly) this.applicationSqlReaders.add(waiter.session)
       else {
         this.applicationSqlWriter = waiter.session
         this.activeAttribution = waiter.session.telemetry?.attribution ?? null
-        this.writeGrantWaitMs.record(performance.now() - waiter.queuedAt)
+        this.writeGrantWaitMs.record(now - waiter.queuedAt)
+      }
+      if (now - waiter.queuedAt >= 500) {
+        const stall: ApplicationSqlGrantStall = {
+          sessionID: waiter.session.sessionID.slice(0, 200),
+          readOnly: waiter.session.readOnly,
+          priority: waiter.session.priority,
+          queuedAt: waiter.queuedAt,
+          admittedAt: now,
+          waitMs: now - waiter.queuedAt,
+          queueDepth: this.applicationSqlQueue.length,
+          holders: this.applicationSqlTurns.filter(
+            (turn) => turn.releasedAt >= waiter.queuedAt && turn.admittedAt <= now
+          ),
+        }
+        this.applicationSqlGrantStalls.push(stall)
+        if (this.applicationSqlGrantStalls.length > 8)
+          this.applicationSqlGrantStalls.shift()
+        console.log(
+          JSON.stringify({
+            event: 'orez_sql_grant_stall',
+            ...this.durableObjectIdentity(),
+            bootID: this.bootID,
+            observedAt: Date.now(),
+            ...stall,
+          })
+        )
       }
       waiter.admit()
     }
@@ -2040,6 +2093,7 @@ export class ZeroDO extends DurableObject {
       if (!session.readOnly) {
         for (const reader of [...this.applicationSqlReaders]) {
           if (reader.priority === 'background') {
+            this.recordApplicationSqlTurn(reader)
             reader.state = 'preempted'
             this.applicationSqlReaders.delete(reader)
           }
@@ -2048,6 +2102,18 @@ export class ZeroDO extends DurableObject {
       this.pumpApplicationSqlQueue()
     })
     return admission
+  }
+
+  private recordApplicationSqlTurn(session: ApplicationSqlSessionTarget): void {
+    this.applicationSqlTurns.push({
+      sessionID: session.sessionID.slice(0, 200),
+      readOnly: session.readOnly,
+      priority: session.priority,
+      admittedAt: session.admittedAt,
+      releasedAt: performance.now(),
+      statements: session.statements,
+    })
+    if (this.applicationSqlTurns.length > 64) this.applicationSqlTurns.shift()
   }
 
   /**
@@ -2087,6 +2153,7 @@ export class ZeroDO extends DurableObject {
       return
     }
     this.assertApplicationSqlSession(session)
+    this.recordApplicationSqlTurn(session)
     session.state = 'closed'
     if (session.readOnly) this.applicationSqlReaders.delete(session)
     else {
@@ -2387,6 +2454,7 @@ export class ZeroDO extends DurableObject {
     return this.atomically(() => {
       const mutation = this.prepareApplicationSqlMutation(session.sessionID, sql)
       if (mutation) session.mutated = true
+      session.statements++
       const result = this.executeSQL(
         sql,
         [...params],
@@ -2425,6 +2493,7 @@ export class ZeroDO extends DurableObject {
     return this.atomically(() => {
       const mutation = this.prepareApplicationSqlMutation(session.sessionID, sql)
       if (mutation) session.mutated = true
+      session.statements++
       const result = this.executeSQL(
         sql,
         [...params],
@@ -2456,6 +2525,7 @@ export class ZeroDO extends DurableObject {
           try {
             const mutation = this.prepareApplicationSqlMutation(session.sessionID, sql)
             if (mutation) session.mutated = true
+            session.statements++
             const result = this.executeSQL(
               sql,
               [...params],
@@ -2498,6 +2568,7 @@ export class ZeroDO extends DurableObject {
           plan,
           (sql, params) => {
             this.assertApplicationSqlStatement(session, sql)
+            session.statements++
             return this.executeSQL(
               sql,
               params,

@@ -119,6 +119,8 @@ async function createTestZero(transaction: <T>(work: TransactionWork<T>) => Prom
   zero.applicationSqlWriter = null
   zero.applicationSqlReaders = new Set()
   zero.applicationSqlQueue = []
+  zero.applicationSqlTurns = []
+  zero.applicationSqlGrantStalls = []
   zero.applicationSqlDidCommit = () => {}
   zero.ctx = {
     id: { toString: () => 'test-object-id', name: 'test-write-attribution' },
@@ -254,6 +256,49 @@ describe('ZeroDO trusted application transaction', () => {
       ])
       await expect(session.commit()).resolves.toBeUndefined()
     } finally {
+      log.mockRestore()
+    }
+  })
+
+  it('attributes a queued grant to unsampled holders and retains it in status', async () => {
+    const { zero } = await createTestZero(async (work) => await work())
+    let now = 0
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const holder = await zero.applicationSqlSession('holder', { readOnly: true })
+      await holder.begin()
+      await holder.query('SELECT id FROM item')
+      now = 100
+      const writer = await zero.applicationSqlSession('waiter')
+      const admission = writer.begin()
+      now = 800
+      await holder.commit()
+      await admission
+      const response = await zero.fetch(
+        new Request('https://example.test/_orez/status', {
+          headers: { 'x-orez-admin-token': 'operator-token' },
+        })
+      )
+      const status = await response.json()
+      expect(status.applicationSql.grantStalls).toHaveLength(1)
+      expect(status.applicationSql.grantStalls[0]).toMatchObject({
+        sessionID: 'waiter',
+        waitMs: 700,
+        holders: [
+          {
+            sessionID: 'holder',
+            readOnly: true,
+            admittedAt: 0,
+            releasedAt: 800,
+            statements: 1,
+          },
+        ],
+      })
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('orez_sql_grant_stall'))
+      await writer.commit()
+    } finally {
+      clock.mockRestore()
       log.mockRestore()
     }
   })

@@ -177,6 +177,14 @@ changefeed, fixed bookkeeping). The physical total is the same post-consume
 zero SQLite rows and does not change `_zero_changes`. Cloudflare Workers logs
 may drop events, so a partial capture is not an exact object-level total.
 
+Grant waits of at least 500 ms emit `orez_sql_grant_stall` with the waiting
+session and overlapping released holders, independent of SQL sampling. Each
+object retains its last 64 released turns in memory and the last eight stalls
+in authenticated `/_orez/status` under `applicationSql.grantStalls`. Admission
+and release times use the object's monotonic clock; the log includes its boot
+ID and wall-clock observation time. This bounded history may omit older turns
+when more than 64 sessions finish during a wait. It adds no SQLite operations.
+
 ### Transaction rollback must not copy hot tables
 
 The data worker emulates Postgres transactions over Durable Object requests.
