@@ -164,7 +164,15 @@ type TrustConfig = {
 }
 
 function readTrust(name: string): TrustConfig | undefined {
-  const result = captureNpm(['trust', 'list', name, '--json'])
+  let result = captureNpm(['trust', 'list', name, '--json'])
+  const errText = `${result.stdout}\n${result.stderr}`
+  if (
+    result.status !== 0 &&
+    (errText.includes('EOTP') || errText.includes('one-time pass'))
+  ) {
+    runNpm(['trust', 'list', name])
+    result = captureNpm(['trust', 'list', name, '--json'])
+  }
   if (result.status !== 0) {
     throw new Error(`could not read ${name} trust: ${result.stderr.trim()}`)
   }
@@ -267,10 +275,6 @@ async function main(): Promise<void> {
       continue
     }
     verifyOwner(name)
-    const trust = readTrust(name)
-    if (trust && !trustMatches(trust, target.workflow)) {
-      throw new Error(`${name} already has a different trusted publisher`)
-    }
   }
 
   console.log(`\nThis permanently claims and configures these npm package names:\n`)
