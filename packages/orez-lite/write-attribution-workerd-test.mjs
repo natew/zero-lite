@@ -119,9 +119,60 @@ const unusedCompiler = () => {
 const dataWorker = createOrezDataWorker({
   name: 'writeattr',
   schema,
-  async routes({ request, url, applicationSql }) {
+  async routes({ request, url, applicationSql, env, instance }) {
     const parts = url.pathname.split('/').filter(Boolean)
     const sql = applicationSql()
+    if (request.method === 'POST' && parts[0] === 'snapshot-lease') {
+      const owner = env.ZERO_SQL_DO.get(env.ZERO_SQL_DO.idFromName(instance))
+      await sql.transaction(unusedCompiler, async (tx) => {
+        await tx.exec("INSERT INTO item (id, name) VALUES ('a', 'a'), ('b', 'b'), ('c', 'c')")
+      })
+      const snapshot = await owner.backupSnapshot({ markerTable: 'missing', excludedTables: [] })
+      const writer = await owner.applicationSqlSession('snapshot-open-writer')
+      const status = async () => {
+        const response = await owner.fetch(new Request('https://fixture/_orez/status', {
+          headers: { 'x-orez-admin-token': env.OREZ_DO_WRITE_BUDGET_ADMIN_TOKEN },
+        }))
+        if (!response.ok) throw new Error('snapshot status failed: ' + response.status)
+        return response.json()
+      }
+      const chunks = []
+      const states = []
+      try {
+        await writer.begin()
+        await writer.exec("UPDATE item SET name = 'dirty'")
+        const before = await status()
+        for (let round = 0; round < 4; round++) {
+          let cursor = 0
+          const values = []
+          for (let page = 0; page < 3; page++) {
+            const key = 'snapshot/' + round + '/' + page
+            await env.BACKUP_FILES.put(key, JSON.stringify(values))
+            const stored = await env.BACKUP_FILES.get(key)
+            if (!stored || await stored.text() !== JSON.stringify(values)) throw new Error('R2 await failed')
+            const rows = await snapshot.lease.readPage('item', cursor, 1)
+            if (rows.length !== 1) throw new Error('snapshot page missing')
+            cursor = rows[0].__orez_backup_rowid
+            values.push(rows[0].c1)
+            states.push(await status())
+            await env.BACKUP_FILES.delete(key)
+          }
+          chunks.push(values)
+        }
+        const after = await status()
+        await writer.rollback()
+        await owner.backupSnapshotDrop(snapshot.id)
+        let stale = false
+        try { await snapshot.lease.readPage('item', 0, 1) }
+        catch (error) { stale = String(error).includes('no longer active') }
+        return Response.json({ chunks, states, before, after, stale })
+      } finally {
+        await writer.rollback()
+        writer[Symbol.dispose]()
+        await owner.backupSnapshotDrop(snapshot.id)
+        snapshot.lease[Symbol.dispose]()
+      }
+    }
     if (request.method === 'GET' && parts[0] === 'feed-ids') {
       const rows = await sql.query(
         'SELECT table_name AS tableName, op FROM _zero_changes ORDER BY watermark'
@@ -309,6 +360,10 @@ OREZ_SQL_TELEMETRY_SAMPLE_RATE = "${sampleRate}"
 name = "ZERO_SQL_DO"
 class_name = "ZeroDO"
 
+[[r2_buckets]]
+binding = "BACKUP_FILES"
+bucket_name = "snapshot-fixture"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ZeroDO"]
@@ -387,6 +442,52 @@ new_sqlite_classes = ["ZeroDO"]
       body: JSON.stringify({ suffix: 'warm' }),
     })
     assert.equal(warmup.status, 200, await warmup.text())
+
+    const snapshotNamespace = 'test-snapshot-lease'
+    const snapshotMigration = await fetch(
+      `${base}/${snapshotNamespace}/_orez/schema/migrate`,
+      { method: 'POST' }
+    )
+    assert.equal(snapshotMigration.status, 200, await snapshotMigration.text())
+    const snapshotResponse = await fetch(
+      `${base}/snapshot-lease?ns=${snapshotNamespace}`,
+      {
+        method: 'POST',
+        headers: { ...headers, 'x-orez-ns': snapshotNamespace },
+      }
+    )
+    const snapshotBody = await snapshotResponse.text()
+    assert.equal(snapshotResponse.status, 200, snapshotBody)
+    const snapshot = JSON.parse(snapshotBody)
+    assert.deepEqual(
+      snapshot.chunks,
+      Array.from({ length: 4 }, () => ['a', 'b', 'c'])
+    )
+    assert.equal(snapshot.stale, true)
+    assert.equal(
+      snapshot.after.sqlBillingSinceBoot.rowsWritten,
+      snapshot.before.sqlBillingSinceBoot.rowsWritten
+    )
+    assert.equal(
+      snapshot.after.requestsSinceBoot.applicationSqlReadSessions,
+      snapshot.before.requestsSinceBoot.applicationSqlReadSessions
+    )
+    for (const state of snapshot.states) {
+      assert.equal(state.applicationSql.writerActive, true)
+      assert.equal(state.applicationSql.activeReaders, 0)
+      assert.equal(state.applicationSql.queuedReaders, 0)
+      assert.equal(state.applicationSql.queuedWriters, 0)
+    }
+    console.log(
+      JSON.stringify({
+        event: 'snapshot_lease_workerd',
+        sampleRate,
+        chunks: snapshot.chunks.length,
+        pages: snapshot.states.length,
+        rowsWritten: 0,
+        staleRejected: snapshot.stale,
+      })
+    )
 
     const receipts = []
     for (const name of FIXTURES) {

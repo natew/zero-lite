@@ -412,35 +412,9 @@ describe('createOrezDataWorker', () => {
     expect(new TextDecoder().decode(result.body)).toBe('committed')
   })
 
-  it('copies and drops a snapshot around background scan sessions', async () => {
-    const rowsFor = (sql: string) =>
-      sql.includes('SELECT write_seq') ? [{ write_seq: 7 }] : []
-    const session = {
-      [Symbol.dispose]: vi.fn(),
-      begin: vi.fn(async () => undefined),
-      query: vi.fn(async (sql: string) => rowsFor(sql)),
-      queryPreemptible: vi.fn(async (sql: string) => ({
-        outcome: 'completed' as const,
-        value: rowsFor(sql),
-      })),
-      exec: vi.fn(),
-      queryPlan: vi.fn(),
-      queryPlanPreemptible: vi.fn(),
-      registerTables: vi.fn(),
-      commit: vi.fn(async () => undefined),
-      commitPreemptible: vi.fn(async () => ({
-        outcome: 'completed' as const,
-        value: undefined,
-      })),
-      rollback: vi.fn(async () => undefined),
-    }
-    const applicationSqlSession = vi.fn(
-      async (_sessionID: string, _options?: { readOnly?: boolean; priority?: string }) =>
-        session
-    )
-    const applicationSqlQuery = vi.fn(
-      async (sql: string) => rowsFor(sql) as Record<string, unknown>[]
-    )
+  it('pages and releases the snapshot lease during export', async () => {
+    const readPage = vi.fn(async () => [])
+    const dispose = vi.fn()
     const runtime = createOrezDataWorker({
       name: 'testapp',
       schema: descriptor,
@@ -474,7 +448,7 @@ describe('createOrezDataWorker', () => {
     })
     const backupSnapshot = vi.fn(async () => ({
       id: 'snapshot',
-      lease: { [Symbol.dispose]() {} },
+      lease: { readPage, [Symbol.dispose]: dispose },
       marker: 7,
       tables: ['item'],
       columns: { item: ['id'] },
@@ -492,8 +466,6 @@ describe('createOrezDataWorker', () => {
       ZERO_SQL_DO: {
         idFromName: (name: string) => name,
         get: () => ({
-          applicationSqlSession,
-          applicationSqlQuery,
           backupSnapshot,
           backupSnapshotDrop,
         }),
@@ -504,32 +476,8 @@ describe('createOrezDataWorker', () => {
 
     expect(backupSnapshot).toHaveBeenCalledOnce()
     expect(backupSnapshotDrop).toHaveBeenCalledWith(expect.any(String))
-    expect(applicationSqlSession).toHaveBeenCalledOnce()
-    expect(applicationSqlQuery).not.toHaveBeenCalled()
-    expect(session.begin).toHaveBeenCalledOnce()
-    expect(session.queryPreemptible).toHaveBeenCalledTimes(1)
-    expect(session.query).not.toHaveBeenCalled()
-    expect(session.commitPreemptible).toHaveBeenCalledOnce()
-    expect(session.commit).not.toHaveBeenCalled()
-    expect(session.rollback).not.toHaveBeenCalled()
-
-    await runtime.backupManager!.exportNamespace(env as any, 'singleton', {
-      priority: 'normal',
-      scanChunkBytes: 32 * 1024 * 1024,
-    })
-
-    expect(applicationSqlSession).toHaveBeenNthCalledWith(1, expect.any(String), {
-      readOnly: true,
-      priority: 'background',
-    })
-    expect(applicationSqlSession).toHaveBeenNthCalledWith(2, expect.any(String), {
-      readOnly: true,
-      priority: 'normal',
-    })
-    expect(session.queryPreemptible).toHaveBeenCalledTimes(1)
-    expect(session.query).toHaveBeenCalledTimes(1)
-    expect(session.commitPreemptible).toHaveBeenCalledOnce()
-    expect(session.commit).toHaveBeenCalledOnce()
+    expect(readPage).toHaveBeenCalledWith('item', 0, 200)
+    expect(dispose).toHaveBeenCalledOnce()
   })
 
   it('schedules an application consumer only after a published commit', async () => {

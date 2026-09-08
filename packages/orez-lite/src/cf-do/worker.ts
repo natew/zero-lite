@@ -428,16 +428,28 @@ const APPLICATION_SQL_ROLLBACK = Symbol('applicationSqlRollback')
 const APPLICATION_SQL_DISPOSE = Symbol('applicationSqlDispose')
 
 const BACKUP_SNAPSHOT_DISPOSE = Symbol('backupSnapshotDispose')
+const BACKUP_SNAPSHOT_READ = Symbol('backupSnapshotRead')
 
 class BackupSnapshotLease extends RpcTarget {
-  constructor(
-    readonly owner: ZeroDO,
-    readonly id: string
-  ) {
+  #owner: ZeroDO
+  #id: string
+  #tables: Set<string>
+
+  constructor(owner: ZeroDO, id: string, tables: readonly string[]) {
     super()
+    this.#owner = owner
+    this.#id = id
+    this.#tables = new Set(tables)
   }
+
+  async readPage(table: string, afterRowid: number, limit: number) {
+    if (!this.#tables.has(table))
+      throw new TypeError('table is not in this backup snapshot')
+    return this.#owner[BACKUP_SNAPSHOT_READ](this.#id, table, afterRowid, limit)
+  }
+
   [Symbol.dispose](): void {
-    this.owner[BACKUP_SNAPSHOT_DISPOSE](this.id)
+    this.#owner[BACKUP_SNAPSHOT_DISPOSE](this.#id)
   }
 }
 
@@ -1031,11 +1043,31 @@ export class ZeroDO extends DurableObject {
           return { id, marker, tables, schema, columns }
         })
         this.backupSnapshotID = id
-        return { ...result, lease: new BackupSnapshotLease(this, id) }
+        return { ...result, lease: new BackupSnapshotLease(this, id, result.tables) }
       } finally {
         this.backupMaintenance = false
       }
     })
+  }
+
+  [BACKUP_SNAPSHOT_READ](id: string, table: string, afterRowid: number, limit: number) {
+    if (this.backupSnapshotID !== id)
+      throw new Error('backup snapshot lease is no longer active')
+    if (!Number.isSafeInteger(afterRowid) || afterRowid < 0) {
+      throw new TypeError('backup page cursor must be a nonnegative safe integer')
+    }
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+      throw new TypeError('backup page limit must be an integer from 1 through 1000')
+    }
+    // the committed copy is immutable; live application journal sessions cannot change it.
+    const physicalTable = `_orez_bk_${id}_${table}`.replaceAll('"', '""')
+    return this.sql
+      .exec(
+        `SELECT rowid AS __orez_backup_rowid, * FROM "${physicalTable}" WHERE rowid > ? ORDER BY rowid LIMIT ?`,
+        afterRowid,
+        limit
+      )
+      .toArray()
   }
 
   [BACKUP_SNAPSHOT_DISPOSE](id: string): void {

@@ -146,10 +146,13 @@ rows remain visible in billing telemetry.
 
 Snapshot columns use temporary `c0`, `c1`, … names so source `rowid`, `_rowid_`,
 `oid`, and cursor-shaped columns cannot interfere with paging. The export maps
-these back to source names and pages immutable rowid tables in bounded background
-read sessions.
-Writers may preempt a chunk, which is retried up to `chunkAttempts` times. Live
-commits never invalidate the snapshot, and R2 uploads run outside read sessions.
+these back to source names and pages immutable rowid tables through the snapshot
+lease. Each page validates the generation, captured table membership, nonnegative
+safe integer cursor, and limit of 1 through 1000 rows before a synchronous SELECT.
+It owns no application admission turn, including across R2 awaits; live writers,
+commits, and rollbacks cannot change the copied rows. A stale lease or missing
+physical table fails the export. Outstanding uploads settle before abort, and a
+failed scan never publishes the latest pointer.
 Dumps keep their existing source table names, CREATE statements, and format.
 Each copy has generation-specific table names so restarting the object cannot
 substitute a new snapshot into an older scan. Exports release ownership before

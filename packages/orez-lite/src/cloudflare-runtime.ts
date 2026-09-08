@@ -60,8 +60,6 @@ export type {
   NamespaceBackupManager,
   NamespaceBackupObject,
   NamespaceBackupOptions,
-  NamespaceBackupReadOptions,
-  NamespaceBackupReadPriority,
   NamespaceBackupStatement,
   NamespaceBackupSnapshot,
   NamespaceBackupSnapshotOptions,

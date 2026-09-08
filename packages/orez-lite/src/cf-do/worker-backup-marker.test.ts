@@ -78,7 +78,11 @@ async function createWorkerCore() {
       throw error
     }
   }
+  const pending: Promise<unknown>[] = []
   zero.ctx = {
+    waitUntil: (promise: Promise<unknown>) => {
+      pending.push(promise)
+    },
     storage: {
       transaction: async <T>(work: () => T) => runTransaction(work),
       transactionSync: runTransaction,
@@ -90,7 +94,7 @@ async function createWorkerCore() {
   zero.applicationSqlDidCommit = (_published: boolean, changed: boolean) => {
     changedData.push(changed)
   }
-  return { ...storage, zero, changedData }
+  return { ...storage, zero, changedData, pending }
 }
 
 async function runSession(
@@ -172,6 +176,94 @@ describe('backup marker', () => {
 })
 
 describe('physical backup snapshots', () => {
+  it('pages the committed copy during live writes and rejects stale or invalid lease reads', async () => {
+    const core = await createWorkerCore()
+    core.nativeDb.exec(
+      "CREATE TABLE item (id INTEGER PRIMARY KEY, value TEXT); INSERT INTO item VALUES (1, 'a'), (2, 'b'), (3, 'c')"
+    )
+    const setup = await core.zero.applicationSqlSession('setup')
+    await setup.begin()
+    await setup.registerTables([{ table: 'item', publicTable: 'item' }])
+    await setup.commit()
+    const snapshot = await core.zero.backupSnapshot({
+      markerTable: 'missing',
+      excludedTables: [],
+    })
+    const writer = await core.zero.applicationSqlSession('live')
+    await writer.begin()
+    await writer.exec("UPDATE item SET value = 'dirty'")
+    expect(core.nativeDb.prepare('SELECT value FROM item WHERE id = 1').get()).toEqual({
+      value: 'dirty',
+    })
+    const sessionsBefore = core.zero.requestsSinceBoot.applicationSqlReadSessions
+    const first = await snapshot.lease.readPage('item', 0, 2)
+    const second = await snapshot.lease.readPage('item', first[1].__orez_backup_rowid, 2)
+    expect([...first, ...second].map((row: Record<string, unknown>) => row.c1)).toEqual([
+      'a',
+      'b',
+      'c',
+    ])
+    expect(core.zero.applicationSqlReaders.size).toBe(0)
+    expect(core.zero.applicationSqlQueue).toHaveLength(0)
+    expect(core.zero.applicationSqlWriter).toBe(writer)
+    expect(core.zero.requestsSinceBoot.applicationSqlReadSessions).toBe(sessionsBefore)
+    await writer.rollback()
+    const committed = await core.zero.applicationSqlSession('committed')
+    await committed.begin()
+    await committed.exec("UPDATE item SET value = 'committed'")
+    await committed.commit()
+    expect(
+      (await snapshot.lease.readPage('item', 0, 3)).map(
+        (row: Record<string, unknown>) => row.c1
+      )
+    ).toEqual(['a', 'b', 'c'])
+    const exec = vi.spyOn(core.zero.sql, 'exec')
+    await expect(snapshot.lease.readPage('sqlite_master', 0, 1)).rejects.toThrow(
+      'not in this backup snapshot'
+    )
+    await expect(snapshot.lease.readPage('item', -1, 1)).rejects.toThrow('cursor')
+    await expect(snapshot.lease.readPage('item', 0, 1001)).rejects.toThrow('limit')
+    expect(exec).not.toHaveBeenCalled()
+    exec.mockRestore()
+    snapshot.lease[Symbol.dispose]()
+    await expect(snapshot.lease.readPage('item', 0, 1)).rejects.toThrow(
+      'no longer active'
+    )
+    expect(core.pending).toHaveLength(1)
+    await Promise.all(core.pending)
+    expect(
+      core.nativeDb
+        .prepare("SELECT name FROM sqlite_master WHERE name GLOB '_orez_bk_*'")
+        .all()
+    ).toEqual([])
+    const next = await core.zero.backupSnapshot({
+      markerTable: 'missing',
+      excludedTables: [],
+    })
+    await expect(snapshot.lease.readPage('item', 0, 1)).rejects.toThrow(
+      'no longer active'
+    )
+    await core.zero.backupSnapshotDrop(snapshot.id)
+    expect((await next.lease.readPage('item', 0, 1))[0].c1).toBe('committed')
+    await core.zero.backupSnapshotDrop(next.id)
+    core.nativeDb.close()
+  })
+
+  it('throws when a physical copy disappears while the lease generation remains active', async () => {
+    const core = await createWorkerCore()
+    core.nativeDb.exec(
+      "CREATE TABLE item (id INTEGER PRIMARY KEY, value TEXT); INSERT INTO item VALUES (1, 'a')"
+    )
+    const snapshot = await core.zero.backupSnapshot({
+      markerTable: 'missing',
+      excludedTables: [],
+    })
+    core.nativeDb.exec(`DROP TABLE "_orez_bk_${snapshot.id}_item"`)
+    await expect(snapshot.lease.readPage('item', 0, 1)).rejects.toThrow('no such table')
+    await core.zero.backupSnapshotDrop(snapshot.id)
+    core.nativeDb.close()
+  })
+
   it('copies the rolled-back state and recovers after failed cleanup admission', async () => {
     const core = await createWorkerCore()
     core.nativeDb.exec(
