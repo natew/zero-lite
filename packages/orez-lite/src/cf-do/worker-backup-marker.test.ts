@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { RollingRowWriteBudget } from '../do-sql-tracking.js'
 import { TransactionalCdc } from './cdc.js'
+import { createNamespaceBackupManager } from './namespace-backup.js'
 import { DurableWatermarkState } from './watermark.js'
 
 vi.mock('cloudflare:workers', () => ({
@@ -107,6 +108,121 @@ async function runSession(
   await work(session)
   await session.commit()
 }
+
+it('exports one consistent account and ledger snapshot across a committed write between pages', async () => {
+  const core = await createWorkerCore()
+  core.nativeDb.exec(
+    'CREATE TABLE account (id INTEGER PRIMARY KEY, balance INTEGER); CREATE TABLE ledger (id INTEGER PRIMARY KEY, amount INTEGER)'
+  )
+  core.nativeDb.exec('INSERT INTO account VALUES (1, 2200)')
+  const insert = core.nativeDb.prepare('INSERT INTO ledger VALUES (?, 1)')
+  for (let id = 1; id <= 2200; id++) insert.run(id)
+  await runSession(core, 'register', async (session) => {
+    await session.registerTables([
+      { table: 'account', publicTable: 'account' },
+      { table: 'ledger', publicTable: 'ledger' },
+    ])
+  })
+  const parts: Uint8Array[] = []
+  const pointers = new Map<string, string>()
+  let completed = false
+  let committed = false
+  let pages = 0
+  const manager = createNamespaceBackupManager<unknown>({
+    format: 'test-v3',
+    markerTable: 'missing',
+    scanChunkBytes: 1,
+    snapshot: async (_env, _namespace, options) => {
+      const snapshot = await core.zero.backupSnapshot(options)
+      return {
+        ...snapshot,
+        lease: {
+          async readPage(table: string, cursor: number, limit: number) {
+            const rows = await snapshot.lease.readPage(table, cursor, limit)
+            pages++
+            if (table === 'account' && !committed) {
+              await runSession(core, 'deposit-between-pages', async (writer) => {
+                await writer.exec('UPDATE account SET balance = balance + 1 WHERE id = 1')
+                await writer.exec('UPDATE ledger SET amount = amount + 1 WHERE id = 1')
+              })
+              committed = true
+            }
+            return rows
+          },
+          [Symbol.dispose]() {
+            snapshot.lease[Symbol.dispose]()
+          },
+        },
+      }
+    },
+    dropSnapshot: async (_env, _namespace, id) => core.zero.backupSnapshotDrop(id),
+    files: () => ({
+      async get() {
+        return null
+      },
+      async put(key, value) {
+        pointers.set(key, value)
+      },
+      async list() {
+        return { objects: [] }
+      },
+      async delete() {},
+      async createMultipartUpload() {
+        return {
+          async uploadPart(partNumber, value) {
+            parts[partNumber - 1] = value
+            return { partNumber }
+          },
+          async complete() {
+            completed = true
+          },
+          async abort() {
+            throw new Error('unexpected export abort')
+          },
+        }
+      },
+    }),
+    query: async () => [],
+    batch: async () => {},
+    listNamespaces: async () => ['singleton'],
+  })
+  try {
+    const result = await manager.exportNamespace({}, 'singleton')
+    expect(result.summary.tableRows.account).toBe(1)
+    expect(result.summary.tableRows.ledger).toBe(2200)
+    expect(completed).toBe(true)
+    expect(committed).toBe(true)
+    expect(pages).toBeGreaterThan(3)
+    expect(pointers.has('backups/singleton/latest.json')).toBe(true)
+    const lines = Buffer.concat(parts)
+      .toString()
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    const account = lines
+      .filter((line) => line.kind === 'rows' && line.table === 'account')
+      .flatMap((line) => line.rows)
+    const ledger = lines
+      .filter((line) => line.kind === 'rows' && line.table === 'ledger')
+      .flatMap((line) => line.rows)
+    expect(account).toHaveLength(1)
+    expect(ledger).toHaveLength(2200)
+    expect(
+      core.nativeDb.prepare('SELECT balance FROM account WHERE id = 1').get()
+    ).toEqual({ balance: 2201 })
+    expect(
+      core.nativeDb.prepare('SELECT SUM(amount) AS amount FROM ledger').get()
+    ).toEqual({ amount: 2201 })
+    const total = ledger.reduce((sum, row) => sum + row.amount, 0)
+    expect(total, 'backup ledger total must equal its account balance').toBe(
+      account[0].balance
+    )
+    expect(account[0].balance).toBe(2200)
+  } finally {
+    await Promise.all(core.pending)
+    core.nativeDb.close()
+  }
+})
 
 describe('backup marker', () => {
   it('does not move for a row mutation that matched nothing', async () => {
